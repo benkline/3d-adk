@@ -24,6 +24,9 @@ LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 # Projects Directory
 PROJECTS_DIR = os.getenv("PROJECTS_DIR", "./projects")
 
+# Sessions Directory
+SESSIONS_DIR = os.getenv("SESSIONS_DIR", "./sessions")
+
 # Validate required keys
 missing_keys = [key for key in REQUIRED_KEYS if not os.getenv(key)]
 if missing_keys:
