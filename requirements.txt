@@ -1,0 +1,15 @@
+# Core Framework
+google-adk
+
+# Image Processing
+Pillow
+requests
+
+# 3D Modeling
+solidpython2
+
+# OctoPrint Integration
+octorest
+
+# Utilities
+python-dotenv
