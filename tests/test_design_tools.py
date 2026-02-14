@@ -1,0 +1,227 @@
+"""Tests for design_tools interview functionality - TDD approach."""
+
+import asyncio
+import json
+import os
+import pytest
+import importlib
+from pathlib import Path
+from unittest.mock import patch
+
+# Import after we'll patch config
+import src.config
+import src.tools.design_tools
+
+
+@pytest.fixture
+def tmp_projects_dir(tmp_path):
+    """Create a temporary projects directory for testing."""
+    projects_dir = tmp_path / "projects"
+    projects_dir.mkdir()
+    return str(projects_dir)
+
+
+@pytest.fixture
+def mock_projects_dir(tmp_projects_dir, monkeypatch):
+    """Patch PROJECTS_DIR to use temporary directory."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setenv("PROJECTS_DIR", tmp_projects_dir)
+
+    # Patch config module
+    monkeypatch.setattr(src.config, "PROJECTS_DIR", tmp_projects_dir)
+
+    # Reload design_tools to pick up the patched PROJECTS_DIR
+    importlib.reload(src.tools.design_tools)
+
+    return tmp_projects_dir
+
+
+@pytest.fixture(autouse=True)
+def reset_imports(mock_projects_dir):
+    """Reset imports between tests to avoid state sharing."""
+    yield
+    # After test, reload modules to reset any module-level state
+    importlib.reload(src.tools.design_tools)
+
+
+# Now we can import the function
+from src.tools.design_tools import conduct_interview
+
+
+class TestInterviewMode:
+    """Test suite for conduct_interview function."""
+
+    @pytest.mark.asyncio
+    async def test_interview_starts_with_first_question(self, mock_projects_dir):
+        """When interview starts, first question should be returned."""
+        # [ ] Interview completes with all required information
+        result = await conduct_interview("I want to make a phone stand", "test-project")
+
+        assert result["status"] == "in_progress"
+        assert result["interview_complete"] is False
+        assert result["design_brief"] is None
+        assert "next_question" in result
+        assert "question_number" in result
+        assert result["question_number"] == 1
+
+    @pytest.mark.asyncio
+    async def test_interview_stores_answer_in_json(self, mock_projects_dir):
+        """After first question answered, interview.json should contain the response."""
+        # [ ] All responses stored in interview.json
+        project_name = "test-project"
+        user_input = "A phone stand for my desk"
+
+        await conduct_interview(user_input, project_name)
+
+        interview_path = Path(mock_projects_dir) / project_name / "design" / "interview.json"
+        assert interview_path.exists(), f"interview.json not created at {interview_path}"
+
+        with open(interview_path) as f:
+            interview_data = json.load(f)
+
+        assert "answers" in interview_data
+        assert interview_data["answers"]["object_name"] == user_input
+
+    @pytest.mark.asyncio
+    async def test_interview_advances_question_index(self, mock_projects_dir):
+        """Subsequent calls should advance to next question."""
+        # [ ] Questions flow naturally based on responses
+        project_name = "test-project"
+
+        # First call
+        result1 = await conduct_interview("A phone stand", project_name)
+        assert result1["question_number"] == 1
+
+        # Second call
+        result2 = await conduct_interview("100mm x 80mm x 60mm", project_name)
+        assert result2["question_number"] == 2
+        assert result2["next_question"] != result1["next_question"]
+
+    @pytest.mark.asyncio
+    async def test_interview_completes_after_all_answers(self, mock_projects_dir):
+        """After 7 answers, interview should be complete."""
+        # [ ] Interview completes with all required information
+        project_name = "test-project"
+
+        answers = [
+            "A phone stand",
+            "100mm x 80mm x 60mm",
+            "PLA",
+            "minimalist",
+            "must fit iPhone 14",
+            "no",
+            "none",
+        ]
+
+        for i, answer in enumerate(answers):
+            result = await conduct_interview(answer, project_name)
+
+            if i < 6:  # Last question
+                assert result["status"] == "in_progress"
+                assert result["interview_complete"] is False
+            else:  # Final answer
+                assert result["status"] == "complete"
+                assert result["interview_complete"] is True
+
+    @pytest.mark.asyncio
+    async def test_interview_returns_design_brief_when_complete(self, mock_projects_dir):
+        """When complete, design_brief should have all required keys."""
+        # [ ] Interview completes with all required information
+        project_name = "test-project"
+
+        answers = [
+            "phone stand",
+            "100mm x 80mm x 60mm",
+            "PLA",
+            "minimalist",
+            "must fit iPhone 14, non-slip base",
+            "no",
+            "none",
+        ]
+
+        result = None
+        for answer in answers:
+            result = await conduct_interview(answer, project_name)
+
+        assert result["interview_complete"] is True
+        design_brief = result["design_brief"]
+
+        # Verify required fields
+        required_keys = {"name", "purpose", "dimensions", "materials", "aesthetics", "constraints", "special_requirements"}
+        assert set(design_brief.keys()) == required_keys
+
+        # Verify dimensions is a dict with width/height/depth
+        assert isinstance(design_brief["dimensions"], dict)
+        assert "width" in design_brief["dimensions"]
+        assert "height" in design_brief["dimensions"]
+        assert "depth" in design_brief["dimensions"]
+
+        # Verify materials is a list
+        assert isinstance(design_brief["materials"], list)
+
+        # Verify constraints is a list
+        assert isinstance(design_brief["constraints"], list)
+
+    @pytest.mark.asyncio
+    async def test_interview_returns_summary_when_complete(self, mock_projects_dir):
+        """When complete, summary should be generated."""
+        # [ ] Summary is comprehensive and accurate
+        project_name = "test-project"
+
+        answers = [
+            "phone stand",
+            "100mm x 80mm x 60mm",
+            "PLA",
+            "minimalist",
+            "must fit iPhone 14",
+            "no",
+            "none",
+        ]
+
+        for answer in answers:
+            result = await conduct_interview(answer, project_name)
+
+        assert result["interview_complete"] is True
+        assert "summary" in result
+        assert isinstance(result["summary"], str)
+        assert len(result["summary"]) > 0
+        # Summary should reference the project name
+        assert "phone stand" in result["summary"].lower() or "summary" in result["summary"].lower()
+
+    @pytest.mark.asyncio
+    async def test_interview_empty_user_input_returns_error(self, mock_projects_dir):
+        """Empty user input should return error."""
+        result = await conduct_interview("", "test-project")
+
+        assert result["status"] == "error"
+        assert "message" in result
+
+    @pytest.mark.asyncio
+    async def test_interview_empty_project_name_returns_error(self, mock_projects_dir):
+        """Empty project name should return error."""
+        result = await conduct_interview("some input", "")
+
+        assert result["status"] == "error"
+        assert "message" in result
+
+    @pytest.mark.asyncio
+    async def test_interview_json_updated_with_each_call(self, mock_projects_dir):
+        """interview.json should accumulate answers across calls."""
+        # [ ] All responses stored in interview.json
+        project_name = "test-project"
+
+        answer1 = "phone stand"
+        await conduct_interview(answer1, project_name)
+
+        interview_path = Path(mock_projects_dir) / project_name / "design" / "interview.json"
+        with open(interview_path) as f:
+            data1 = json.load(f)
+        assert data1["current_question_index"] == 1
+
+        answer2 = "100mm x 80mm"
+        await conduct_interview(answer2, project_name)
+
+        with open(interview_path) as f:
+            data2 = json.load(f)
+        assert data2["current_question_index"] == 2
+        assert len(data2["answers"]) == 2
