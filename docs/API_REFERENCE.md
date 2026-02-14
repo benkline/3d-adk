@@ -29,18 +29,44 @@ See: [../specs/COORDINATOR_AGENT_SPEC.md](../specs/COORDINATOR_AGENT_SPEC.md)
 **Tools:**
 
 #### `conduct_interview(user_input: str, project_name: str) -> dict`
-Conduct structured conversation to gather design requirements.
+Conduct structured multi-turn interview to gather design requirements. Persists state to `projects/{project_name}/design/interview.json`.
 
 **Parameters:**
 - `user_input` (str): User's response to the current interview question (non-empty)
 - `project_name` (str): Name of the project (non-empty)
 
+**Interview Flow:**
+Asks 7 sequential questions to gather design requirements:
+1. Object name and initial description
+2. Dimensions (e.g., "100mm x 80mm x 60mm")
+3. Materials (e.g., "PLA, PETG")
+4. Aesthetic style (e.g., "minimalist")
+5. Constraints (e.g., "must fit iPhone 14")
+6. Moving parts/assembly info
+7. Special requirements
+
 **Returns:** dict with keys:
 - `status` (str): "in_progress", "complete", or "error"
+- `interview_complete` (bool): Whether all questions have been answered
+- `question_number` (int): Current question number (1-indexed)
+- `total_questions` (int): Total number of interview questions
 - `next_question` (str): Next question to ask (if status is "in_progress")
-- `interview_complete` (bool): Whether interview is complete
-- `design_brief` (dict or None): Structured design requirements (when complete)
+- `design_brief` (dict or None): Structured design brief (when complete)
+- `summary` (str): Human-readable summary of design (when complete)
 - `message` (str): Error message (if status is "error")
+
+**Design Brief Structure (when complete):**
+```json
+{
+  "name": "object name",
+  "purpose": "primary purpose",
+  "dimensions": {"width": "100", "height": "80", "depth": "60"},
+  "materials": ["PLA"],
+  "aesthetics": "minimalist",
+  "constraints": ["must fit iPhone 14"],
+  "special_requirements": []
+}
+```
 
 **Error Handling:** Returns error dict with message rather than raising exceptions
 
