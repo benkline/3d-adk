@@ -20,6 +20,97 @@ See: [../specs/COORDINATOR_AGENT_SPEC.md](../specs/COORDINATOR_AGENT_SPEC.md)
 
 **Workflow:** Interview → Sketches → Images → Blueprint
 
+**Implementation:** `google.adk.agents.LlmAgent` with four `FunctionTool`-wrapped async functions
+
+**Agent Name:** `design_phase_agent`
+
+**Model:** Uses configured `LLM_MODEL` from `src.config`
+
+**Tools:**
+
+#### `conduct_interview(user_input: str, project_name: str) -> dict`
+Conduct structured conversation to gather design requirements.
+
+**Parameters:**
+- `user_input` (str): User's response to the current interview question (non-empty)
+- `project_name` (str): Name of the project (non-empty)
+
+**Returns:** dict with keys:
+- `status` (str): "in_progress", "complete", or "error"
+- `next_question` (str): Next question to ask (if status is "in_progress")
+- `interview_complete` (bool): Whether interview is complete
+- `design_brief` (dict or None): Structured design requirements (when complete)
+- `message` (str): Error message (if status is "error")
+
+**Error Handling:** Returns error dict with message rather than raising exceptions
+
+---
+
+#### `generate_sketches(project_name: str, design_brief: dict) -> dict`
+Generate 3-5 conceptual sketch variations from design brief.
+
+**Parameters:**
+- `project_name` (str): Name of the project (non-empty)
+- `design_brief` (dict): Design brief containing object details (non-empty dict)
+
+**Returns:** dict with keys:
+- `status` (str): "ok" or "error"
+- `sketches` (list): List of sketch dicts with metadata
+- `sketch_count` (int): Number of sketches generated
+- `output_dir` (str): Directory where sketches are stored
+- `message` (str): Error message (if status is "error")
+
+**Error Handling:** Returns error dict with message rather than raising exceptions
+
+---
+
+#### `generate_images(project_name: str, sketch_id: str, perspective: str = "front") -> dict`
+Generate detailed images from sketch with specified perspective.
+
+**Parameters:**
+- `project_name` (str): Name of the project (non-empty)
+- `sketch_id` (str): ID of the sketch to render (non-empty)
+- `perspective` (str): Viewing perspective ("front", "side", "3d", "top"), defaults to "front"
+
+**Returns:** dict with keys:
+- `status` (str): "ok" or "error"
+- `images` (list): List of image dicts with metadata
+- `image_count` (int): Number of images generated
+- `output_dir` (str): Directory where images are stored
+- `message` (str): Error message (if status is "error")
+
+**Error Handling:** Returns error dict with message rather than raising exceptions
+
+---
+
+#### `generate_blueprint(project_name: str, design_brief: dict, approved_images: list) -> dict`
+Generate formal technical blueprint and specifications document.
+
+**Parameters:**
+- `project_name` (str): Name of the project (non-empty)
+- `design_brief` (dict): Design brief with object details (non-empty dict)
+- `approved_images` (list): List of approved image IDs
+
+**Returns:** dict with keys:
+- `status` (str): "ok" or "error"
+- `blueprint_path` (str): Path to blueprint markdown file
+- `specs_path` (str): Path to specs JSON file
+- `message` (str): Error message (if status is "error")
+
+**Error Handling:** Returns error dict with message rather than raising exceptions
+
+---
+
+**Output Structure:**
+All design phase outputs stored in `{PROJECTS_DIR}/{project_name}/design/`:
+```
+design/
+├── sketches/        # Conceptual sketches
+├── images/          # Rendered images
+├── blueprint.md     # Technical blueprint
+└── specs.json       # Specifications document
+```
+
 See: [../specs/DESIGN_AGENT_SPEC.md](../specs/DESIGN_AGENT_SPEC.md)
 
 ### Modeling Agent
