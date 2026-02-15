@@ -45,7 +45,7 @@ def reset_imports(mock_projects_dir):
 
 
 # Now we can import the functions
-from src.tools.design_tools import conduct_interview, generate_sketches
+from src.tools.design_tools import conduct_interview, generate_sketches, generate_images
 
 
 class TestInterviewMode:
@@ -379,3 +379,132 @@ class TestSketchGeneration:
         assert all("id" in sketch for sketch in result["sketches"])
         assert all("prompt" in sketch for sketch in result["sketches"])
         assert all("variation" in sketch for sketch in result["sketches"])
+
+
+class TestImageGeneration:
+    """Test suite for generate_images function."""
+
+    @pytest.mark.asyncio
+    async def test_generate_images_empty_project_name_returns_error(self, mock_projects_dir):
+        """Empty project name should return error."""
+        result = await generate_images("", "sketch_123", "front")
+
+        assert result["status"] == "error"
+        assert "message" in result
+
+    @pytest.mark.asyncio
+    async def test_generate_images_empty_sketch_id_returns_error(self, mock_projects_dir):
+        """Empty sketch ID should return error."""
+        result = await generate_images("test-project", "", "front")
+
+        assert result["status"] == "error"
+        assert "message" in result
+
+    @pytest.mark.asyncio
+    async def test_generate_images_invalid_perspective_returns_error(self, mock_projects_dir):
+        """Invalid perspective should return error."""
+        result = await generate_images("test-project", "sketch_123", "invalid")
+
+        assert result["status"] == "error"
+        assert "message" in result
+        assert "front" in result["message"]
+
+    @pytest.mark.asyncio
+    async def test_generate_images_returns_ok_status(self, mock_projects_dir, monkeypatch):
+        """generate_images should return ok status with valid inputs."""
+        from unittest.mock import MagicMock
+
+        # Mock the Anthropic client
+        mock_client = MagicMock()
+        mock_response = MagicMock()
+        mock_response.content = [MagicMock(text='["A high-quality render of the product from the front"]')]
+        mock_client.messages.create = MagicMock(return_value=mock_response)
+
+        monkeypatch.setattr(
+            "src.tools.design_tools._get_anthropic_client",
+            lambda: mock_client
+        )
+
+        result = await generate_images("test-project", "sketch_abc123", "front")
+
+        assert result["status"] == "ok"
+        assert "images" in result
+        assert result["image_count"] == 1
+        assert result["perspective"] == "front"
+
+    @pytest.mark.asyncio
+    async def test_generate_images_creates_output_directory(self, mock_projects_dir, monkeypatch):
+        """generate_images should create output directory."""
+        from unittest.mock import MagicMock
+
+        mock_client = MagicMock()
+        mock_response = MagicMock()
+        mock_response.content = [MagicMock(text='["A render from the side"]')]
+        mock_client.messages.create = MagicMock(return_value=mock_response)
+
+        monkeypatch.setattr(
+            "src.tools.design_tools._get_anthropic_client",
+            lambda: mock_client
+        )
+
+        result = await generate_images("test-project", "sketch_123", "side")
+
+        images_dir = Path(mock_projects_dir) / "test-project" / "design" / "images"
+        assert images_dir.exists(), f"Images directory not created at {images_dir}"
+
+    @pytest.mark.asyncio
+    async def test_generate_images_creates_metadata_file(self, mock_projects_dir, monkeypatch):
+        """generate_images should create metadata.json."""
+        from unittest.mock import MagicMock
+
+        mock_client = MagicMock()
+        mock_response = MagicMock()
+        mock_response.content = [MagicMock(text='["A top-down render"]')]
+        mock_client.messages.create = MagicMock(return_value=mock_response)
+
+        monkeypatch.setattr(
+            "src.tools.design_tools._get_anthropic_client",
+            lambda: mock_client
+        )
+
+        await generate_images("test-project", "sketch_xyz", "top")
+
+        metadata_path = Path(mock_projects_dir) / "test-project" / "design" / "images" / "metadata.json"
+        assert metadata_path.exists(), f"metadata.json not created at {metadata_path}"
+
+        with open(metadata_path) as f:
+            metadata = json.load(f)
+        assert "images" in metadata
+        assert len(metadata["images"]) == 1
+
+    @pytest.mark.asyncio
+    async def test_generate_images_record_has_required_keys(self, mock_projects_dir, monkeypatch):
+        """Image record should have all required keys."""
+        from unittest.mock import MagicMock
+
+        mock_client = MagicMock()
+        mock_response = MagicMock()
+        mock_response.content = [MagicMock(text='["A 3D perspective render"]')]
+        mock_client.messages.create = MagicMock(return_value=mock_response)
+
+        monkeypatch.setattr(
+            "src.tools.design_tools._get_anthropic_client",
+            lambda: mock_client
+        )
+
+        result = await generate_images("test-project", "sketch_abc", "3d")
+
+        assert result["status"] == "ok"
+        assert len(result["images"]) == 1
+        image_record = result["images"][0]
+
+        required_keys = {"id", "sketch_id", "perspective", "prompt", "material_context", "created_at", "status", "image_path"}
+        assert set(image_record.keys()) == required_keys
+
+        # Verify values
+        assert image_record["sketch_id"] == "sketch_abc"
+        assert image_record["perspective"] == "3d"
+        assert image_record["status"] == "pending_generation"
+        assert image_record["image_path"] is None
+        assert isinstance(image_record["prompt"], str)
+        assert len(image_record["prompt"]) > 0
