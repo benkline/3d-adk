@@ -35,6 +35,35 @@ def _get_exports_dir(project_name: str) -> Path:
     return exports_dir
 
 
+def _get_previews_dir(project_name: str) -> Path:
+    """Get the path to the previews subdirectory for a project."""
+    previews_dir = _get_modeling_dir(project_name) / "previews"
+    previews_dir.mkdir(parents=True, exist_ok=True)
+    return previews_dir
+
+
+def _get_camera_params(perspective: str) -> str:
+    """Get OpenSCAD camera parameters for a given perspective view.
+
+    Args:
+        perspective: View angle name (front, back, left, right, top, bottom, isometric)
+
+    Returns:
+        Camera parameter string for OpenSCAD --camera flag
+    """
+    camera_map = {
+        "isometric": "0,0,0,55,0,25,140",
+        "front": "0,0,0,0,0,0,200",
+        "back": "0,0,0,0,180,0,200",
+        "left": "0,0,0,0,270,0,200",
+        "right": "0,0,0,0,90,0,200",
+        "top": "0,0,0,90,0,0,200",
+        "bottom": "0,0,0,-90,0,0,200"
+    }
+    # Return requested perspective or default to isometric
+    return camera_map.get(perspective.lower(), camera_map["isometric"])
+
+
 def _load_modeling_metadata(project_name: str) -> dict:
     """Load existing modeling metadata or create new."""
     modeling_dir = _get_modeling_dir(project_name)
@@ -449,4 +478,156 @@ async def export_model(project_name: str, export_format: str = "stl") -> dict:
         return {
             "status": "error",
             "message": f"Failed to export model: {str(e)}"
+        }
+
+
+async def render_preview(
+    project_name: str,
+    perspectives: Optional[list] = None,
+    resolution: int = 512
+) -> dict:
+    """Generate preview images of OpenSCAD model from multiple viewing angles.
+
+    Args:
+        project_name: Name of the project (non-empty string)
+        perspectives: List of view angles to render (front, back, left, right, top, bottom, isometric).
+                     Defaults to ["front", "isometric", "top"]
+        resolution: Output resolution in pixels (256-1024), defaults to 512
+
+    Returns:
+        dict with keys:
+        - status: "ok", "pending", or "error"
+        - preview_paths: list[str] (if status is "ok")
+        - perspectives: list[str] (if status is "ok")
+        - resolution: int (if status is "ok")
+        - message: str
+    """
+    logger.info(f"render_preview called: project={project_name}, resolution={resolution}")
+
+    # Validate inputs
+    if not isinstance(project_name, str) or not project_name.strip():
+        logger.warning("render_preview: empty project_name")
+        return {
+            "status": "error",
+            "message": "project_name must be a non-empty string"
+        }
+
+    # Validate and normalize resolution
+    if not isinstance(resolution, int) or resolution < 256 or resolution > 1024:
+        logger.warning(f"render_preview: invalid resolution: {resolution}")
+        return {
+            "status": "error",
+            "message": "resolution must be an integer between 256 and 1024"
+        }
+
+    # Set default perspectives if not provided
+    if perspectives is None:
+        perspectives = ["front", "isometric", "top"]
+
+    # Validate perspective list
+    if not isinstance(perspectives, list) or not perspectives:
+        logger.warning("render_preview: invalid perspectives list")
+        return {
+            "status": "error",
+            "message": "perspectives must be a non-empty list"
+        }
+
+    # Validate each perspective name
+    valid_perspectives = {"front", "back", "left", "right", "top", "bottom", "isometric"}
+    invalid = [p for p in perspectives if p not in valid_perspectives]
+    if invalid:
+        logger.warning(f"render_preview: invalid perspective names: {invalid}")
+        return {
+            "status": "error",
+            "message": f"Invalid perspective names: {', '.join(invalid)}. Valid options: {', '.join(sorted(valid_perspectives))}"
+        }
+
+    try:
+        # Check if SCAD file exists
+        scad_dir = _get_scad_dir(project_name)
+        scad_path = scad_dir / "model.scad"
+
+        if not scad_path.exists():
+            logger.warning(f"render_preview: SCAD file not found at {scad_path}")
+            return {
+                "status": "error",
+                "message": f"OpenSCAD model not found at {scad_path}"
+            }
+
+        # Check if OpenSCAD binary exists
+        if not os.path.exists(OPENSCAD_PATH):
+            logger.warning(f"render_preview: OpenSCAD binary not found at {OPENSCAD_PATH}")
+            return {
+                "status": "pending",
+                "message": f"OpenSCAD binary not found at {OPENSCAD_PATH}. Model file ready but preview rendering is pending."
+            }
+
+        # Generate previews for each perspective
+        previews_dir = _get_previews_dir(project_name)
+        preview_paths = []
+        successful_perspectives = []
+
+        for perspective in perspectives:
+            try:
+                camera_params = _get_camera_params(perspective)
+                output_file = previews_dir / f"preview_{perspective}.png"
+
+                # Run OpenSCAD to generate preview
+                cmd = [
+                    OPENSCAD_PATH,
+                    "-o", str(output_file),
+                    "--imgsize=" + str(resolution) + "," + str(resolution),
+                    "--camera=" + camera_params,
+                    str(scad_path)
+                ]
+
+                subprocess.run(cmd, check=True, capture_output=True, timeout=120)
+                logger.info(f"render_preview: generated {perspective} preview at {output_file}")
+                preview_paths.append(str(output_file))
+                successful_perspectives.append(perspective)
+
+            except subprocess.TimeoutExpired:
+                logger.warning(f"render_preview: timeout rendering {perspective} for {project_name}")
+            except subprocess.CalledProcessError as e:
+                logger.warning(f"render_preview: failed to render {perspective}: {e.stderr.decode() if e.stderr else 'Unknown error'}")
+            except Exception as e:
+                logger.warning(f"render_preview: error rendering {perspective}: {str(e)}")
+
+        # Check if any previews were generated
+        if not preview_paths:
+            logger.error(f"render_preview: no previews generated for {project_name}")
+            return {
+                "status": "error",
+                "message": f"Failed to generate any preview images for {project_name}"
+            }
+
+        # Update metadata
+        metadata = _load_modeling_metadata(project_name)
+        preview_record = {
+            "id": f"preview_{uuid.uuid4().hex[:8]}",
+            "perspectives": successful_perspectives,
+            "resolution": resolution,
+            "paths": preview_paths,
+            "created_at": datetime.now().isoformat(),
+            "status": "generated"
+        }
+
+        if "previews" not in metadata:
+            metadata["previews"] = []
+        metadata["previews"].append(preview_record)
+        _save_modeling_metadata(project_name, metadata)
+
+        return {
+            "status": "ok",
+            "preview_paths": preview_paths,
+            "perspectives": successful_perspectives,
+            "resolution": resolution,
+            "message": f"Generated {len(preview_paths)} preview image(s) for {project_name}"
+        }
+
+    except Exception as e:
+        logger.error(f"render_preview: error for {project_name}: {str(e)}", exc_info=True)
+        return {
+            "status": "error",
+            "message": f"Failed to render previews: {str(e)}"
         }

@@ -23,11 +23,11 @@ class TestModelingAgent:
         from src.agents.modeling import modeling_agent
         assert modeling_agent.name == "modeling_phase_agent"
 
-    def test_modeling_agent_has_four_tools(self):
-        """Test that modeling agent has four tools."""
+    def test_modeling_agent_has_five_tools(self):
+        """Test that modeling agent has five tools."""
         os.environ["ANTHROPIC_API_KEY"] = "test_key"
         from src.agents.modeling import modeling_agent
-        assert len(modeling_agent.tools) == 4
+        assert len(modeling_agent.tools) == 5
 
     def test_modeling_agent_uses_config_model(self):
         """Test that modeling agent uses configured LLM model."""
@@ -278,3 +278,142 @@ class TestExportModel:
                 assert "message" in result
             finally:
                 modeling_tools.PROJECTS_DIR = original_dir
+
+
+class TestRenderPreview:
+    """Tests for render_preview tool."""
+
+    @pytest.mark.asyncio
+    async def test_render_preview_with_valid_input_no_binary(self):
+        """Test render_preview returns pending status when OpenSCAD binary not found."""
+        os.environ["ANTHROPIC_API_KEY"] = "test_key"
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Monkeypatch the module-level constants
+            import src.tools.modeling_tools as modeling_tools
+            original_projects_dir = modeling_tools.PROJECTS_DIR
+            original_openscad_path = modeling_tools.OPENSCAD_PATH
+            modeling_tools.PROJECTS_DIR = tmpdir
+            modeling_tools.OPENSCAD_PATH = "/nonexistent/openscad"
+
+            try:
+                # Create modeling directory with SCAD file
+                scad_dir = Path(tmpdir) / "test_project" / "modeling" / "scad"
+                scad_dir.mkdir(parents=True, exist_ok=True)
+
+                scad_file = scad_dir / "model.scad"
+                scad_file.write_text("// test scad code")
+
+                from src.tools.modeling_tools import render_preview
+                result = await render_preview("test_project")
+
+                assert isinstance(result, dict)
+                assert "status" in result
+                assert result["status"] == "pending"  # Expected when binary not found
+                assert "message" in result
+            finally:
+                modeling_tools.PROJECTS_DIR = original_projects_dir
+                modeling_tools.OPENSCAD_PATH = original_openscad_path
+
+    @pytest.mark.asyncio
+    async def test_render_preview_with_empty_project_name(self):
+        """Test render_preview returns error with empty project_name."""
+        os.environ["ANTHROPIC_API_KEY"] = "test_key"
+
+        from src.tools.modeling_tools import render_preview
+        result = await render_preview("")
+
+        assert result["status"] == "error"
+        assert "message" in result
+
+    @pytest.mark.asyncio
+    async def test_render_preview_with_invalid_resolution(self):
+        """Test render_preview returns error with invalid resolution."""
+        os.environ["ANTHROPIC_API_KEY"] = "test_key"
+
+        from src.tools.modeling_tools import render_preview
+        # Resolution too high
+        result = await render_preview("test_project", resolution=9999)
+
+        assert result["status"] == "error"
+        assert "message" in result
+        assert "256" in result["message"] or "1024" in result["message"]
+
+    @pytest.mark.asyncio
+    async def test_render_preview_with_invalid_perspective(self):
+        """Test render_preview returns error with invalid perspective names."""
+        os.environ["ANTHROPIC_API_KEY"] = "test_key"
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            import src.tools.modeling_tools as modeling_tools
+            original_dir = modeling_tools.PROJECTS_DIR
+            modeling_tools.PROJECTS_DIR = tmpdir
+
+            try:
+                # Create modeling directory with SCAD file
+                scad_dir = Path(tmpdir) / "test_project" / "modeling" / "scad"
+                scad_dir.mkdir(parents=True, exist_ok=True)
+
+                scad_file = scad_dir / "model.scad"
+                scad_file.write_text("// test scad code")
+
+                from src.tools.modeling_tools import render_preview
+                result = await render_preview("test_project", perspectives=["invalid_view"])
+
+                assert result["status"] == "error"
+                assert "message" in result
+            finally:
+                modeling_tools.PROJECTS_DIR = original_dir
+
+    @pytest.mark.asyncio
+    async def test_render_preview_with_missing_scad_file(self):
+        """Test render_preview returns error when SCAD file doesn't exist."""
+        os.environ["ANTHROPIC_API_KEY"] = "test_key"
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            import src.tools.modeling_tools as modeling_tools
+            original_dir = modeling_tools.PROJECTS_DIR
+            modeling_tools.PROJECTS_DIR = tmpdir
+
+            try:
+                # Create modeling directory but no SCAD file
+                modeling_dir = Path(tmpdir) / "test_project" / "modeling"
+                modeling_dir.mkdir(parents=True, exist_ok=True)
+
+                from src.tools.modeling_tools import render_preview
+                result = await render_preview("test_project")
+
+                assert result["status"] == "error"
+                assert "message" in result
+            finally:
+                modeling_tools.PROJECTS_DIR = original_dir
+
+    @pytest.mark.asyncio
+    async def test_render_preview_returns_dict(self):
+        """Test render_preview returns proper dict structure."""
+        os.environ["ANTHROPIC_API_KEY"] = "test_key"
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            import src.tools.modeling_tools as modeling_tools
+            original_projects_dir = modeling_tools.PROJECTS_DIR
+            original_openscad_path = modeling_tools.OPENSCAD_PATH
+            modeling_tools.PROJECTS_DIR = tmpdir
+            modeling_tools.OPENSCAD_PATH = "/nonexistent/openscad"
+
+            try:
+                # Create modeling directory with SCAD file
+                scad_dir = Path(tmpdir) / "test_project" / "modeling" / "scad"
+                scad_dir.mkdir(parents=True, exist_ok=True)
+
+                scad_file = scad_dir / "model.scad"
+                scad_file.write_text("// test scad code")
+
+                from src.tools.modeling_tools import render_preview
+                result = await render_preview("test_project")
+
+                assert isinstance(result, dict)
+                assert "status" in result
+                assert "message" in result
+            finally:
+                modeling_tools.PROJECTS_DIR = original_projects_dir
+                modeling_tools.OPENSCAD_PATH = original_openscad_path
