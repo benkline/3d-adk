@@ -1,6 +1,9 @@
 # Core Framework
 google-adk
 
+# LLM & API
+anthropic
+
 # Image Processing
 Pillow
 requests

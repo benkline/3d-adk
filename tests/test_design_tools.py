@@ -44,8 +44,8 @@ def reset_imports(mock_projects_dir):
     importlib.reload(src.tools.design_tools)
 
 
-# Now we can import the function
-from src.tools.design_tools import conduct_interview
+# Now we can import the functions
+from src.tools.design_tools import conduct_interview, generate_sketches
 
 
 class TestInterviewMode:
@@ -225,3 +225,157 @@ class TestInterviewMode:
             data2 = json.load(f)
         assert data2["current_question_index"] == 2
         assert len(data2["answers"]) == 2
+
+
+class TestSketchGeneration:
+    """Test suite for generate_sketches function."""
+
+    @pytest.mark.asyncio
+    async def test_generate_sketches_empty_project_name_returns_error(self, mock_projects_dir):
+        """Empty project name should return error."""
+        design_brief = {"name": "test", "purpose": "test"}
+        result = await generate_sketches("", design_brief)
+
+        assert result["status"] == "error"
+        assert "message" in result
+
+    @pytest.mark.asyncio
+    async def test_generate_sketches_empty_design_brief_returns_error(self, mock_projects_dir):
+        """Empty design brief should return error."""
+        result = await generate_sketches("test-project", {})
+
+        assert result["status"] == "error"
+        assert "message" in result
+
+    @pytest.mark.asyncio
+    async def test_generate_sketches_returns_ok_status(self, mock_projects_dir, monkeypatch):
+        """generate_sketches should return ok status."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        design_brief = {
+            "name": "phone stand",
+            "purpose": "desk organization",
+            "dimensions": {"width": 100, "height": 80, "depth": 60},
+            "materials": ["PLA"],
+            "aesthetics": "minimalist",
+            "constraints": ["must fit iPhone 14"],
+            "special_requirements": []
+        }
+
+        # Mock the Anthropic client and its messages.create method
+        mock_client = MagicMock()
+        mock_response = MagicMock()
+        mock_response.content = [MagicMock(text='["prompt1", "prompt2", "prompt3", "prompt4", "prompt5"]')]
+        mock_client.messages.create = MagicMock(return_value=mock_response)
+
+        monkeypatch.setattr(
+            "src.tools.design_tools._get_anthropic_client",
+            lambda: mock_client
+        )
+
+        result = await generate_sketches("test-project", design_brief)
+
+        assert result["status"] == "ok"
+        assert "sketches" in result
+        assert "sketch_count" in result
+        assert result["sketch_count"] >= 3
+
+    @pytest.mark.asyncio
+    async def test_generate_sketches_creates_output_directory(self, mock_projects_dir, monkeypatch):
+        """generate_sketches should create output directory."""
+        from unittest.mock import MagicMock
+
+        design_brief = {
+            "name": "test",
+            "purpose": "test",
+            "dimensions": {},
+            "materials": [],
+            "aesthetics": "test",
+            "constraints": [],
+            "special_requirements": []
+        }
+
+        # Mock the Anthropic client
+        mock_client = MagicMock()
+        mock_response = MagicMock()
+        mock_response.content = [MagicMock(text='["prompt1", "prompt2", "prompt3"]')]
+        mock_client.messages.create = MagicMock(return_value=mock_response)
+
+        monkeypatch.setattr(
+            "src.tools.design_tools._get_anthropic_client",
+            lambda: mock_client
+        )
+
+        result = await generate_sketches("test-project", design_brief)
+
+        sketches_dir = Path(mock_projects_dir) / "test-project" / "design" / "sketches"
+        assert sketches_dir.exists(), f"Sketches directory not created at {sketches_dir}"
+
+    @pytest.mark.asyncio
+    async def test_generate_sketches_creates_metadata_file(self, mock_projects_dir, monkeypatch):
+        """generate_sketches should create metadata.json."""
+        from unittest.mock import MagicMock
+
+        design_brief = {
+            "name": "test",
+            "purpose": "test",
+            "dimensions": {},
+            "materials": [],
+            "aesthetics": "test",
+            "constraints": [],
+            "special_requirements": []
+        }
+
+        # Mock the Anthropic client
+        mock_client = MagicMock()
+        mock_response = MagicMock()
+        mock_response.content = [MagicMock(text='["prompt1", "prompt2"]')]
+        mock_client.messages.create = MagicMock(return_value=mock_response)
+
+        monkeypatch.setattr(
+            "src.tools.design_tools._get_anthropic_client",
+            lambda: mock_client
+        )
+
+        await generate_sketches("test-project", design_brief)
+
+        metadata_path = Path(mock_projects_dir) / "test-project" / "design" / "sketches" / "metadata.json"
+        assert metadata_path.exists(), f"metadata.json not created at {metadata_path}"
+
+        with open(metadata_path) as f:
+            metadata = json.load(f)
+        assert "sketches" in metadata
+
+    @pytest.mark.asyncio
+    async def test_generate_sketches_returns_sketch_list(self, mock_projects_dir, monkeypatch):
+        """generate_sketches should return structured sketch list."""
+        from unittest.mock import MagicMock
+
+        design_brief = {
+            "name": "phone stand",
+            "purpose": "desk organization",
+            "dimensions": {"width": 100, "height": 80, "depth": 60},
+            "materials": ["PLA"],
+            "aesthetics": "minimalist",
+            "constraints": [],
+            "special_requirements": []
+        }
+
+        # Mock the Anthropic client
+        mock_client = MagicMock()
+        mock_response = MagicMock()
+        mock_response.content = [MagicMock(text='["prompt1", "prompt2", "prompt3"]')]
+        mock_client.messages.create = MagicMock(return_value=mock_response)
+
+        monkeypatch.setattr(
+            "src.tools.design_tools._get_anthropic_client",
+            lambda: mock_client
+        )
+
+        result = await generate_sketches("test-project", design_brief)
+
+        assert result["status"] == "ok"
+        assert len(result["sketches"]) == 3
+        assert all("id" in sketch for sketch in result["sketches"])
+        assert all("prompt" in sketch for sketch in result["sketches"])
+        assert all("variation" in sketch for sketch in result["sketches"])

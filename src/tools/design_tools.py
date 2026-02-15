@@ -3,12 +3,26 @@
 import json
 import logging
 import os
+import uuid
 from pathlib import Path
 from typing import Optional
+from datetime import datetime
 
-from src.config import PROJECTS_DIR
+from anthropic import Anthropic
+
+from src.config import PROJECTS_DIR, ANTHROPIC_API_KEY
 
 logger = logging.getLogger(__name__)
+
+# Initialize Anthropic client for prompt engineering
+_anthropic_client = None
+
+def _get_anthropic_client():
+    """Get or create Anthropic client."""
+    global _anthropic_client
+    if _anthropic_client is None:
+        _anthropic_client = Anthropic(api_key=ANTHROPIC_API_KEY)
+    return _anthropic_client
 
 # Interview questions sequence
 INTERVIEW_QUESTIONS = [
@@ -137,6 +151,116 @@ def _generate_summary(project_name: str, design_brief: dict) -> str:
     return "\n".join(lines)
 
 
+def _get_sketches_dir(project_name: str) -> Path:
+    """Get the path to the sketches directory for a project."""
+    sketches_dir = Path(PROJECTS_DIR) / project_name / "design" / "sketches"
+    sketches_dir.mkdir(parents=True, exist_ok=True)
+    return sketches_dir
+
+
+def _load_sketches_metadata(project_name: str) -> dict:
+    """Load existing sketches metadata or create new."""
+    sketches_dir = _get_sketches_dir(project_name)
+    metadata_path = sketches_dir / "metadata.json"
+
+    if metadata_path.exists():
+        with open(metadata_path) as f:
+            return json.load(f)
+
+    return {"sketches": []}
+
+
+def _save_sketches_metadata(project_name: str, metadata: dict) -> None:
+    """Save sketches metadata to disk."""
+    sketches_dir = _get_sketches_dir(project_name)
+    metadata_path = sketches_dir / "metadata.json"
+    with open(metadata_path, "w") as f:
+        json.dump(metadata, f, indent=2)
+
+
+def _engineer_sketch_prompts(design_brief: dict) -> list[str]:
+    """Engineer image generation prompts from design brief using Claude.
+
+    Returns list of 3-5 distinct prompt variations for sketch generation.
+    """
+    client = _get_anthropic_client()
+
+    # Build context from design brief
+    brief_context = f"""Design Brief:
+- Name: {design_brief.get('name', 'Unnamed')}
+- Purpose: {design_brief.get('purpose', 'Not specified')}
+- Dimensions: {design_brief.get('dimensions', {})}
+- Materials: {', '.join(design_brief.get('materials', ['PLA']))}
+- Aesthetics: {design_brief.get('aesthetics', 'Not specified')}
+- Constraints: {', '.join(design_brief.get('constraints', []))}
+- Special Requirements: {', '.join(design_brief.get('special_requirements', []))}"""
+
+    prompt = f"""{brief_context}
+
+Generate 5 distinct image generation prompts for creating conceptual sketches of this design.
+Each prompt should:
+1. Emphasize form and proportion over detail
+2. Request a specific viewing angle or perspective
+3. Include the aesthetic style and material finish
+4. Be suitable for image generation AI models (like DALL-E or Midjourney)
+5. Be uniquely different from the others
+
+Format your response as a JSON array of exactly 5 strings, each being a complete prompt.
+Return ONLY the JSON array, no other text."""
+
+    message = client.messages.create(
+        model="claude-opus-4-6",
+        max_tokens=2048,
+        messages=[
+            {"role": "user", "content": prompt}
+        ]
+    )
+
+    try:
+        # Parse the response as JSON
+        response_text = message.content[0].text
+        prompts = json.loads(response_text)
+
+        # Ensure we have exactly 5 prompts
+        if isinstance(prompts, list) and len(prompts) >= 3:
+            return prompts[:5]  # Return up to 5
+        else:
+            logger.warning("Failed to parse prompts from Claude, using fallback")
+            return _generate_fallback_prompts(design_brief)
+    except (json.JSONDecodeError, IndexError, AttributeError) as e:
+        logger.warning(f"Error parsing Claude response: {e}, using fallback prompts")
+        return _generate_fallback_prompts(design_brief)
+
+
+def _generate_fallback_prompts(design_brief: dict) -> list[str]:
+    """Generate fallback prompts if Claude prompt engineering fails."""
+    name = design_brief.get('name', 'product')
+    aesthetics = design_brief.get('aesthetics', 'modern')
+    materials_list = design_brief.get('materials', ['PLA'])
+    materials = materials_list[0] if materials_list else 'PLA'
+
+    return [
+        f"Conceptual sketch of a {name}, {aesthetics} design in {materials}, front view, clean lines, minimalist style",
+        f"3D perspective sketch of {name}, {aesthetics} aesthetic, showing depth and proportion, 3/4 view",
+        f"Side profile sketch of {name}, functional design, emphasizing form and balance",
+        f"Technical conceptual sketch of {name}, {aesthetics} style, top-down view, clear proportions",
+        f"Artistic rendering of {name}, {aesthetics} finish, highlighting material texture and surface details",
+    ]
+
+
+def _create_sketch_record(sketch_id: str, variation_num: int, prompt: str) -> dict:
+    """Create a sketch metadata record."""
+    return {
+        "id": sketch_id,
+        "variation": variation_num,
+        "prompt": prompt,
+        "created_at": datetime.now().isoformat(),
+        "status": "pending_generation",
+        "image_path": None,
+        "annotations": []
+    }
+
+
 async def conduct_interview(user_input: str, project_name: str) -> dict:
     """Conduct structured interview to gather design requirements.
 
@@ -233,6 +357,9 @@ async def conduct_interview(user_input: str, project_name: str) -> dict:
 async def generate_sketches(project_name: str, design_brief: dict) -> dict:
     """Generate conceptual sketches from design brief.
 
+    Uses Claude to engineer distinct image generation prompts, then creates
+    sketch records with metadata for storing the generated images.
+
     Args:
         project_name: Name of the project
         design_brief: Design brief dict with object details
@@ -264,14 +391,54 @@ async def generate_sketches(project_name: str, design_brief: dict) -> dict:
             "message": "design_brief must be a non-empty dict"
         }
 
-    # Stub implementation: return empty sketch list
-    logger.info(f"generate_sketches: returning ok for {project_name}")
-    return {
-        "status": "ok",
-        "sketches": [],
-        "sketch_count": 0,
-        "output_dir": f"./projects/{project_name}/design/sketches"
-    }
+    try:
+        # Engineer prompts from design brief using Claude
+        prompts = _engineer_sketch_prompts(design_brief)
+        logger.info(f"generate_sketches: engineered {len(prompts)} prompts for {project_name}")
+
+        # Create sketch records with metadata
+        sketches_dir = _get_sketches_dir(project_name)
+        metadata = _load_sketches_metadata(project_name)
+        sketches = []
+
+        for variation_num, prompt in enumerate(prompts, 1):
+            sketch_id = f"sketch_{uuid.uuid4().hex[:8]}"
+            sketch_record = _create_sketch_record(sketch_id, variation_num, prompt)
+
+            # Create a subdirectory for this sketch
+            sketch_dir = sketches_dir / sketch_id
+            sketch_dir.mkdir(parents=True, exist_ok=True)
+
+            # Save the prompt for reference
+            prompt_path = sketch_dir / "prompt.txt"
+            with open(prompt_path, "w") as f:
+                f.write(prompt)
+
+            sketches.append(sketch_record)
+
+        # Update and save metadata
+        metadata["sketches"].extend(sketches)
+        metadata["last_updated"] = datetime.now().isoformat()
+        metadata["design_brief_hash"] = str(hash(json.dumps(design_brief, sort_keys=True)))
+        _save_sketches_metadata(project_name, metadata)
+
+        logger.info(f"generate_sketches: created {len(sketches)} sketch records for {project_name}")
+
+        return {
+            "status": "ok",
+            "sketches": sketches,
+            "sketch_count": len(sketches),
+            "output_dir": str(sketches_dir),
+            "prompts": prompts,
+            "message": f"Generated {len(sketches)} sketch variations with engineered prompts"
+        }
+
+    except Exception as e:
+        logger.error(f"generate_sketches: error for {project_name}: {str(e)}", exc_info=True)
+        return {
+            "status": "error",
+            "message": f"Failed to generate sketches: {str(e)}"
+        }
 
 
 async def generate_images(
