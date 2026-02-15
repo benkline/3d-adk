@@ -89,6 +89,18 @@ def _save_modeling_metadata(project_name: str, metadata: dict) -> None:
         json.dump(metadata, f, indent=2)
 
 
+def _validate_export_file(output_file: Path) -> bool:
+    """Validate that an exported file exists and has non-zero size.
+
+    Args:
+        output_file: Path to the exported file
+
+    Returns:
+        True if file exists and has size > 0, False otherwise
+    """
+    return output_file.exists() and output_file.stat().st_size > 0
+
+
 def _load_design_specs(project_name: str, specs_path: Optional[str] = None) -> dict:
     """Load design specifications from JSON file."""
     if specs_path:
@@ -585,21 +597,25 @@ async def generate_scad_code(project_name: str, design_specs: dict) -> dict:
         }
 
 
-async def export_model(project_name: str, export_format: str = "stl") -> dict:
-    """Export OpenSCAD model to printable format.
+async def export_model(project_name: str, export_format: str = "stl", parts: Optional[list] = None) -> dict:
+    """Export OpenSCAD model(s) to printable format.
 
     Args:
         project_name: Name of the project (non-empty string)
         export_format: Export format ("stl" or "3mf"), defaults to "stl"
+        parts: Optional list of part names for multi-part export. If None, exports model.scad.
+               If provided, exports each part as scad/{part_name}.scad
 
     Returns:
         dict with keys:
         - status: "ok", "pending", or "error"
-        - export_path: str (path to exported file, if generated)
+        - export_path: str (path to exported file, for single-part)
+        - export_paths: list[str] (paths to exported files, for multi-part)
         - export_format: str
+        - parts: list[str] (part names, for multi-part success)
         - message: str
     """
-    logger.info(f"export_model called: project={project_name}, format={export_format}")
+    logger.info(f"export_model called: project={project_name}, format={export_format}, parts={parts}")
 
     # Validate inputs
     if not isinstance(project_name, str) or not project_name.strip():
@@ -616,75 +632,181 @@ async def export_model(project_name: str, export_format: str = "stl") -> dict:
             "message": f"export_format must be 'stl' or '3mf', got '{export_format}'"
         }
 
+    # Validate parts parameter
+    if parts is not None:
+        if not isinstance(parts, list) or len(parts) == 0:
+            logger.warning("export_model: parts must be a non-empty list")
+            return {
+                "status": "error",
+                "message": "parts must be a non-empty list of part names"
+            }
+
     try:
-        # Check if SCAD file exists
-        scad_dir = _get_scad_dir(project_name)
-        scad_path = scad_dir / "model.scad"
-
-        if not scad_path.exists():
-            logger.warning(f"export_model: SCAD file not found at {scad_path}")
-            return {
-                "status": "error",
-                "message": f"OpenSCAD model not found at {scad_path}"
-            }
-
-        # Check if OpenSCAD binary exists
-        if not os.path.exists(OPENSCAD_PATH):
-            logger.warning(f"export_model: OpenSCAD binary not found at {OPENSCAD_PATH}")
-            return {
-                "status": "pending",
-                "export_format": export_format,
-                "message": f"OpenSCAD binary not found at {OPENSCAD_PATH}. Model file generated but export is pending manual rendering."
-            }
-
-        # Determine output file name
-        exports_dir = _get_exports_dir(project_name)
-        output_file = exports_dir / f"model.{export_format}"
-
-        # Run OpenSCAD to export
-        try:
-            cmd = [OPENSCAD_PATH, "-o", str(output_file), str(scad_path)]
-            subprocess.run(cmd, check=True, capture_output=True, timeout=300)
-            logger.info(f"export_model: model exported to {output_file}")
-
-            # Update metadata
-            metadata = _load_modeling_metadata(project_name)
-            export_record = {
-                "id": str(uuid.uuid4()),
-                "filename": f"model.{export_format}",
-                "format": export_format,
-                "path": str(output_file),
-                "created_at": datetime.now().isoformat(),
-                "status": "exported"
-            }
-            metadata["exports"].append(export_record)
-            _save_modeling_metadata(project_name, metadata)
-
-            return {
-                "status": "ok",
-                "export_path": str(output_file),
-                "export_format": export_format,
-                "message": f"Model exported successfully to {export_format.upper()}"
-            }
-
-        except subprocess.TimeoutExpired:
-            logger.error(f"export_model: OpenSCAD timeout for {project_name}")
-            return {
-                "status": "error",
-                "message": "OpenSCAD export timed out (>300 seconds)"
-            }
-        except subprocess.CalledProcessError as e:
-            logger.error(f"export_model: OpenSCAD failed: {e.stderr.decode()}")
-            return {
-                "status": "error",
-                "message": f"OpenSCAD export failed: {e.stderr.decode() if e.stderr else 'Unknown error'}"
-            }
+        # Multi-part export
+        if parts is not None:
+            return await _export_multi_part(project_name, export_format, parts)
+        # Single-part export
+        else:
+            return await _export_single_part(project_name, export_format)
 
     except Exception as e:
         logger.error(f"export_model: error for {project_name}: {str(e)}", exc_info=True)
         return {
             "status": "error",
             "message": f"Failed to export model: {str(e)}"
+        }
+
+
+async def _export_single_part(project_name: str, export_format: str) -> dict:
+    """Export single model.scad file.
+
+    Args:
+        project_name: Name of the project
+        export_format: Export format ("stl" or "3mf")
+
+    Returns:
+        dict with export result
+    """
+    # Check if OpenSCAD binary exists
+    if not os.path.exists(OPENSCAD_PATH):
+        logger.warning(f"_export_single_part: OpenSCAD binary not found at {OPENSCAD_PATH}")
+        return {
+            "status": "pending",
+            "export_format": export_format,
+            "message": f"OpenSCAD binary not found at {OPENSCAD_PATH}. Model file is ready for manual rendering."
+        }
+
+    scad_dir = _get_scad_dir(project_name)
+    scad_path = scad_dir / "model.scad"
+
+    if not scad_path.exists():
+        logger.warning(f"_export_single_part: SCAD file not found at {scad_path}")
+        return {
+            "status": "error",
+            "message": f"OpenSCAD model not found at {scad_path}"
+        }
+
+    exports_dir = _get_exports_dir(project_name)
+    output_file = exports_dir / f"model.{export_format}"
+
+    try:
+        cmd = [OPENSCAD_PATH, "-o", str(output_file), str(scad_path)]
+        subprocess.run(cmd, check=True, capture_output=True, timeout=300)
+        logger.info(f"_export_single_part: model exported to {output_file}")
+
+        # Validate exported file
+        if not _validate_export_file(output_file):
+            logger.error(f"_export_single_part: exported file is empty or missing: {output_file}")
+            return {
+                "status": "error",
+                "message": f"Exported file is empty or invalid at {output_file}"
+            }
+
+        # Update metadata
+        metadata = _load_modeling_metadata(project_name)
+        export_record = {
+            "id": str(uuid.uuid4()),
+            "filename": f"model.{export_format}",
+            "format": export_format,
+            "path": str(output_file),
+            "created_at": datetime.now().isoformat(),
+            "status": "exported"
+        }
+        metadata["exports"].append(export_record)
+        _save_modeling_metadata(project_name, metadata)
+
+        return {
+            "status": "ok",
+            "export_path": str(output_file),
+            "export_format": export_format,
+            "message": f"Model exported successfully to {export_format.upper()}"
+        }
+
+    except subprocess.TimeoutExpired:
+        logger.error(f"_export_single_part: OpenSCAD timeout for {project_name}")
+        return {
+            "status": "error",
+            "message": "OpenSCAD export timed out (>300 seconds)"
+        }
+    except subprocess.CalledProcessError as e:
+        logger.error(f"_export_single_part: OpenSCAD failed: {e.stderr.decode() if e.stderr else 'Unknown error'}")
+        return {
+            "status": "error",
+            "message": f"OpenSCAD export failed: {e.stderr.decode() if e.stderr else 'Unknown error'}"
+        }
+
+
+async def _export_multi_part(project_name: str, export_format: str, parts: list) -> dict:
+    """Export multiple SCAD files as separate parts.
+
+    Args:
+        project_name: Name of the project
+        export_format: Export format ("stl" or "3mf")
+        parts: List of part names to export
+
+    Returns:
+        dict with export result
+    """
+    # Check if OpenSCAD binary exists
+    if not os.path.exists(OPENSCAD_PATH):
+        logger.warning(f"_export_multi_part: OpenSCAD binary not found at {OPENSCAD_PATH}")
+        return {
+            "status": "pending",
+            "export_format": export_format,
+            "message": f"OpenSCAD binary not found at {OPENSCAD_PATH}. Part files are ready for manual rendering."
+        }
+
+    scad_dir = _get_scad_dir(project_name)
+    exports_dir = _get_exports_dir(project_name)
+
+    # Validate all SCAD files exist before exporting
+    missing_parts = []
+    for part_name in parts:
+        part_scad = scad_dir / f"{part_name}.scad"
+        if not part_scad.exists():
+            missing_parts.append(part_name)
+
+    if missing_parts:
+        logger.warning(f"_export_multi_part: missing SCAD files for parts: {missing_parts}")
+        return {
+            "status": "error",
+            "message": f"SCAD files not found for parts: {', '.join(missing_parts)}"
+        }
+
+    export_paths = []
+    failed_parts = []
+
+    # Export each part
+    for part_name in parts:
+        part_scad = scad_dir / f"{part_name}.scad"
+        output_file = exports_dir / f"{part_name}.{export_format}"
+
+        try:
+            cmd = [OPENSCAD_PATH, "-o", str(output_file), str(part_scad)]
+            subprocess.run(cmd, check=True, capture_output=True, timeout=300)
+            logger.info(f"_export_multi_part: part '{part_name}' exported to {output_file}")
+
+            # Validate exported file
+            if not _validate_export_file(output_file):
+                logger.warning(f"_export_multi_part: exported file is empty for part '{part_name}'")
+                failed_parts.append(part_name)
+                continue
+
+            export_paths.append(str(output_file))
+
+        except subprocess.TimeoutExpired:
+            logger.warning(f"_export_multi_part: timeout exporting part '{part_name}'")
+            failed_parts.append(part_name)
+        except subprocess.CalledProcessError as e:
+            logger.warning(f"_export_multi_part: failed to export part '{part_name}': {e.stderr.decode() if e.stderr else 'Unknown error'}")
+            failed_parts.append(part_name)
+
+    # Check if any exports succeeded
+    if not export_paths:
+        logger.error(f"_export_multi_part: no parts exported successfully for {project_name}")
+        return {
+            "status": "error",
+            "message": f"Failed to export any parts: {', '.join(failed_parts)}"
         }
 
 

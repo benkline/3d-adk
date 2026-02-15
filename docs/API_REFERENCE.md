@@ -406,45 +406,85 @@ Export OpenSCAD model to printable format (STL or 3MF).
 **Parameters:**
 - `project_name` (str): Name of the project (non-empty)
 - `export_format` (str): Export format ("stl" or "3mf"), defaults to "stl"
+- `parts` (list, optional): List of part names for multi-part export. If None, exports single model.scad file. If provided, exports each part as `scad/{part_name}.scad`
 
 **Returns:** dict with keys:
 - `status` (str): "ok", "pending", or "error"
-- `export_path` (str): Path to exported file (if generated)
+- `export_path` (str): Path to exported file (single-part only, if status is "ok")
+- `export_paths` (list[str]): Paths to exported files (multi-part only, if status is "ok")
+- `parts` (list[str]): Successfully exported part names (multi-part only, if status is "ok")
 - `export_format` (str): Format of the export
 - `message` (str): Status or error message
 
 **Export Behavior:**
+
+**Single-Part Export (parts=None):**
 - Validates `export_format` against allowed set: `{"stl", "3mf"}`
 - Checks that OpenSCAD model exists at `{project}/modeling/scad/model.scad`
-- **If OpenSCAD binary found:** Invokes OpenSCAD CLI to render `.scad` → `.stl`/`.3mf` file
+- Validates OpenSCAD binary exists at `OPENSCAD_PATH`
+- **If binary found:** Invokes OpenSCAD CLI to render `.scad` → `.stl`/`.3mf` file
   - Creates `{project}/modeling/exports/model.{format}` file
-  - Returns status "ok" with export path
+  - Validates exported file is non-empty (size > 0 bytes)
+  - Returns status "ok" with single `export_path`
   - Timeout: 300 seconds per render
-- **If OpenSCAD binary not found:** Returns status "pending" (graceful degradation)
-  - Model `.scad` file is ready for manual rendering
-  - User can install OpenSCAD and render manually
-  - No error thrown — supports environments without OpenSCAD installed
+- **If binary not found:** Returns status "pending" (graceful degradation)
+
+**Multi-Part Export (parts=["part1", "part2", ...]):**
+- Validates that all part SCAD files exist at `scad/{part_name}.scad`
+- If any parts are missing, returns status "error" listing missing parts
+- **If binary found:** Exports each part separately
+  - Creates `{project}/modeling/exports/{part_name}.{format}` for each part
+  - Validates each exported file is non-empty
+  - Returns status "ok" with list of `export_paths` and successfully exported `parts`
+  - Continues exporting remaining parts if one fails (graceful degradation)
+  - If any parts fail, returns status "ok" with warning message listing failed parts
+  - Timeout: 300 seconds per part
+- **If binary not found:** Returns status "pending" (graceful degradation)
 
 **OpenSCAD Binary Detection:**
 - Looks for binary at `OPENSCAD_PATH` from environment (see `src/config.py`)
 - Default: `/usr/local/bin/openscad`
 - Configurable via `OPENSCAD_PATH` env var
 
+**File Validation:**
+- After successful export, validates that output file exists and is non-empty
+- Returns status "error" if exported file is zero-sized or missing
+- For multi-part: skips zero-sized parts and continues with remaining parts
+
 **Error Cases (return status "error"):**
+- Empty `project_name`
 - Invalid `export_format`
-- Model `.scad` file not found
+- Invalid `parts` parameter (non-list or empty list)
+- Model `.scad` file not found (single-part)
+- Required part `.scad` files not found (multi-part)
+- All parts failed to export (multi-part)
 - OpenSCAD process failed (non-zero exit code)
-- Subprocess timeout (>300 seconds)
+- Subprocess timeout (>300 seconds per part)
+- Exported file is empty or invalid
 - Other I/O or OS errors
 
 **Metadata Update:**
-On successful export, updates `{project}/modeling/metadata.json` with export record:
+
+Single-part success, updates `{project}/modeling/metadata.json` with:
 ```json
 {
   "id": "uuid",
   "filename": "model.stl",
   "format": "stl",
   "path": "/absolute/path/to/model.stl",
+  "created_at": "ISO timestamp",
+  "status": "exported"
+}
+```
+
+Multi-part success, updates `{project}/modeling/metadata.json` with:
+```json
+{
+  "id": "uuid",
+  "type": "multi_part",
+  "parts": ["base", "lid"],
+  "format": "stl",
+  "paths": ["/absolute/path/to/base.stl", "/absolute/path/to/lid.stl"],
   "created_at": "ISO timestamp",
   "status": "exported"
 }

@@ -537,7 +537,9 @@ class TestExportModel:
             # Monkeypatch the PROJECTS_DIR in the module
             import src.tools.modeling_tools as modeling_tools
             original_dir = modeling_tools.PROJECTS_DIR
+            original_openscad = modeling_tools.OPENSCAD_PATH
             modeling_tools.PROJECTS_DIR = tmpdir
+            modeling_tools.OPENSCAD_PATH = "/bin/sh"
 
             try:
                 # Create modeling directory but no SCAD file
