@@ -468,7 +468,7 @@ Analyze models for printability and generate warnings/recommendations.
 ---
 
 ### TICKET-014: Model Parameter Optimization
-**Status:** TODO
+**Status:** DONE
 **Priority:** P3
 **Phase:** Modeling Agent
 **Depends on:** TICKET-013
@@ -477,18 +477,24 @@ Analyze models for printability and generate warnings/recommendations.
 Optimize model parameters for printing (infill, supports, orientation).
 
 **Tasks:**
-- [ ] Implement print orientation optimization algorithm
-- [ ] Create infill percentage recommendation engine
-- [ ] Build support material strategy generator
-- [ ] Calculate print time and weight estimates
-- [ ] Implement cost estimation
-- [ ] Update relevant documentation in `docs/API_REFERENCE.md`
+- [x] Implement print orientation optimization algorithm
+- [x] Create infill percentage recommendation engine
+- [x] Build support material strategy generator
+- [x] Calculate print time and weight estimates
+- [x] Implement cost estimation
+- [x] Update relevant documentation in `docs/API_REFERENCE.md`
 
 **Acceptance Criteria:**
-- Recommends optimal print orientations
-- Calculates realistic print times
-- Estimates weight and material costs
-- Recommendations reduce support material where possible
+- ✅ Recommends optimal print orientations (minimizes print height)
+- ✅ Calculates realistic print times (8g/hour + adjustments)
+- ✅ Estimates weight and material costs
+- ✅ Recommendations reduce support material (integrated with TICKET-013)
+
+**Implementation:**
+- `optimize_parameters()` async tool with 7 helper functions
+- Registered as 7th tool in modeling_phase_agent
+- Added FILAMENT_COST_PER_KG config (default $25/kg)
+- Integrated with TICKET-013 printability analysis output
 
 ---
 
