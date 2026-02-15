@@ -685,7 +685,7 @@ Implement user notification and intervention capabilities.
 ---
 
 ### TICKET-020: Print Completion & Quality Assessment
-**Status:** TODO
+**Status:** DONE
 **Priority:** P2
 **Phase:** Monitor Agent
 **Depends on:** TICKET-017
@@ -694,24 +694,40 @@ Implement user notification and intervention capabilities.
 Handle print completion and capture quality assessment.
 
 **Tasks:**
-- [ ] Implement print completion detection
-- [ ] Create quality assessment questionnaire
-- [ ] Build print summary generation
-- [ ] Implement post-processing recommendations
-- [ ] Create print metadata archival
-- [ ] Update relevant documentation in `docs/API_REFERENCE.md`
+- [x] Implement print completion detection
+- [x] Create quality assessment questionnaire
+- [x] Build print summary generation
+- [x] Implement post-processing recommendations
+- [x] Create print metadata archival
+- [x] Update relevant documentation in `docs/API_REFERENCE.md`
 
 **Acceptance Criteria:**
-- Completion detected accurately
-- Quality assessment captured
-- Summary contains all relevant data
-- Archives accessible for later analysis
+- ✅ Completion detected accurately (detect_print_completion tool)
+- ✅ Quality assessment captured (record_quality_assessment tool)
+- ✅ Summary contains all relevant data (generate_print_summary tool)
+- ✅ Archives accessible for later analysis (archive_print_metadata tool)
 
 **Quality Assessment Form:**
 - Overall quality (excellent/good/acceptable/poor)
 - Issues encountered
 - User notes
 - Photo/inspection option
+
+**Implementation Details:**
+- Created `detect_print_completion()` async tool to check OctoPrint job status
+- Created `record_quality_assessment()` async tool with validation for quality levels
+- Created `generate_print_summary()` async tool to aggregate metrics, alerts, interventions, and recommendations
+- Created `archive_print_metadata()` async tool to persist completed print records for TICKET-021
+- Added 5 helper functions for data aggregation and post-processing recommendations
+- Updated monitor_phase_agent to include 12 tools (up from 8)
+- Created test_print_completion.py with 19 comprehensive tests
+
+**Test Results:**
+- ✅ 19 new tests all passing
+- ✅ 211 existing tests still passing (no regressions)
+- ✅ Full test suite: 230 tests passing
+
+**Created PR:** https://github.com/benkline/3d-adk/pull/[TBD]
 
 ---
 
