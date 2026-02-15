@@ -235,9 +235,9 @@ See: [../specs/DESIGN_AGENT_SPEC.md](../specs/DESIGN_AGENT_SPEC.md)
 ### Modeling Agent
 **Purpose:** Convert design specifications to OpenSCAD models and exports for 3D printing
 
-**Workflow:** Validation → Setup → Generation → Export
+**Workflow:** Validation → Setup → Generation → Preview → Export
 
-**Implementation:** `google.adk.agents.LlmAgent` with four `FunctionTool`-wrapped async functions
+**Implementation:** `google.adk.agents.LlmAgent` with five `FunctionTool`-wrapped async functions
 
 **Agent Name:** `modeling_phase_agent`
 
@@ -333,8 +333,75 @@ Generate OpenSCAD code from design specifications.
 
 ---
 
-#### `export_model(project_name: str, export_format: str = "stl", parts: Optional[list] = None) -> dict`
-Export OpenSCAD model(s) to printable format (STL or 3MF).
+#### `render_preview(project_name: str, perspectives: Optional[list] = None, resolution: int = 512) -> dict`
+Generate preview images of OpenSCAD models from multiple viewing angles.
+
+**Parameters:**
+- `project_name` (str): Name of the project (non-empty)
+- `perspectives` (list, optional): List of view angles to render. Valid options: "front", "back", "left", "right", "top", "bottom", "isometric". Defaults to `["front", "isometric", "top"]`
+- `resolution` (int, optional): Output resolution in pixels (256-1024). Defaults to 512
+
+**Returns:** dict with keys:
+- `status` (str): "ok", "pending", or "error"
+- `preview_paths` (list[str]): Paths to generated preview images (if status is "ok")
+- `perspectives` (list[str]): Successfully rendered perspective views (if status is "ok")
+- `resolution` (int): Resolution of generated previews (if status is "ok")
+- `message` (str): Status or error message
+
+**Rendering Behavior:**
+- Validates OpenSCAD model exists at `{project}/modeling/scad/model.scad`
+- **If OpenSCAD binary found:** Invokes OpenSCAD CLI to render each perspective
+  - Creates `{project}/modeling/previews/preview_{perspective}.png` files
+  - Uses camera parameters specific to each viewing angle
+  - Returns status "ok" with list of preview paths
+  - Timeout: 120 seconds per perspective
+  - Gracefully handles per-perspective failures (continues rendering other perspectives)
+- **If OpenSCAD binary not found:** Returns status "pending" (graceful degradation)
+  - Preview images cannot be generated without OpenSCAD
+  - User can install OpenSCAD and retry
+  - No error thrown — supports environments without OpenSCAD installed
+
+**Supported Perspectives:**
+- `"front"`: Front-facing view (0° rotation)
+- `"back"`: Rear-facing view (180° rotation)
+- `"left"`: Left side view (270° rotation)
+- `"right"`: Right side view (90° rotation)
+- `"top"`: Top-down view (90° pitch)
+- `"bottom"`: Bottom-up view (-90° pitch)
+- `"isometric"`: Standard isometric 3D view (55°, 25°, 140 distance)
+
+**OpenSCAD Binary Detection:**
+- Looks for binary at `OPENSCAD_PATH` from environment (see `src/config.py`)
+- Default: `/usr/local/bin/openscad`
+- Configurable via `OPENSCAD_PATH` env var
+
+**Error Cases (return status "error"):**
+- Empty `project_name`
+- Invalid `resolution` (outside 256-1024 range)
+- Invalid perspective names
+- Model `.scad` file not found
+- All perspective renders failed
+- Other I/O or OS errors
+
+**Metadata Update:**
+On successful generation, updates `{project}/modeling/metadata.json` with preview record:
+```json
+{
+  "id": "preview_xxxxxxxx",
+  "perspectives": ["front", "isometric", "top"],
+  "resolution": 512,
+  "paths": ["/path/to/preview_front.png", …],
+  "created_at": "ISO timestamp",
+  "status": "generated"
+}
+```
+
+**Error Handling:** Returns error/pending dict with message rather than raising exceptions
+
+---
+
+#### `export_model(project_name: str, export_format: str = "stl") -> dict`
+Export OpenSCAD model to printable format (STL or 3MF).
 
 **Parameters:**
 - `project_name` (str): Name of the project (non-empty)
@@ -431,16 +498,15 @@ Multi-part success, updates `{project}/modeling/metadata.json` with:
 All modeling phase outputs stored in `{PROJECTS_DIR}/{project_name}/modeling/`:
 ```
 modeling/
-├── scad/              # OpenSCAD source files
-│   ├── model.scad     # Generated parametric model (single-part)
-│   ├── base.scad      # Part file 1 (multi-part)
-│   └── lid.scad       # Part file 2 (multi-part)
-├── exports/           # Exported 3D files ready for printing
-│   ├── model.stl      # Single-part export (or model.3mf)
-│   ├── base.stl       # Multi-part export for base
-│   └── lid.stl        # Multi-part export for lid
-├── previews/          # Preview images from multiple viewing angles
-└── metadata.json      # Workspace, export, and preview history
+├── scad/           # OpenSCAD source files
+│   └── model.scad  # Generated parametric model
+├── exports/        # Exported 3D files ready for printing
+│   └── model.stl   # (or model.3mf)
+├── previews/       # Preview images from different viewing angles
+│   ├── preview_front.png
+│   ├── preview_isometric.png
+│   └── preview_top.png
+└── metadata.json   # Workspace, export, and preview history
 ```
 
 ---
@@ -459,16 +525,203 @@ result = await setup_openscad_workspace("my_project")
 result = await generate_scad_code("my_project", design_specs)
 # → status "ok" with model.scad file at {project}/modeling/scad/
 
-# 4. Export to STL for printing
+# 4. Generate preview images from multiple angles
+result = await render_preview("my_project")
+# → status "ok" with preview images at {project}/modeling/previews/
+# OR status "pending" if OpenSCAD not installed
+
+# 5. Export to STL for printing
 result = await export_model("my_project", "stl")
 # → status "ok" with model.stl file at {project}/modeling/exports/
 # OR status "pending" if OpenSCAD not installed (model.scad is ready)
 ```
 
 ### Monitor Agent
-**Purpose:** Monitor 3D print execution
+**Purpose:** Monitor 3D printer status and print jobs via OctoPrint
 
-**Workflow:** Connect → Monitor → Detect Issues → Complete
+**Workflow:** Connect → Printer Status → Job Status → Monitoring Loop
+
+**Implementation:** `google.adk.agents.LlmAgent` with three `FunctionTool`-wrapped functions
+
+**Agent Name:** `monitor_phase_agent`
+
+**Model:** Uses configured `LLM_MODEL` from `src.config`
+
+**Tools:**
+
+#### `test_connection(host: str = "", port: str = "", api_key: str = "") -> dict`
+Test connection to OctoPrint server.
+
+**Parameters:**
+- `host` (str): OctoPrint server hostname/IP (empty string to use config default)
+- `port` (str): OctoPrint port as string (empty string to use config default)
+- `api_key` (str): OctoPrint API key (empty string to use config default)
+
+**Config Fallbacks:**
+When parameters are empty, falls back to environment variables:
+- `OCTOPRINT_HOST` (default: "localhost")
+- `OCTOPRINT_PORT` (default: "5000")
+- `OCTOPRINT_API_KEY` (no default; required)
+
+**Returns:** dict with keys:
+- `status` (str): "ok" or "error"
+- `server_version` (str): OctoPrint server version (if ok)
+- `api_version` (str): OctoPrint API version (if ok)
+- `message` (str): Human-readable status or error message
+
+**Example Success Response:**
+```json
+{
+  "status": "ok",
+  "server_version": "1.8.7",
+  "api_version": "0.1",
+  "message": "Successfully connected to OctoPrint 1.8.7"
+}
+```
+
+**Example Error Response:**
+```json
+{
+  "status": "error",
+  "message": "Failed to connect to OctoPrint: Connection refused"
+}
+```
+
+**Error Handling:** Returns error dict with message rather than raising exceptions
+
+---
+
+#### `get_printer_status(host: str = "", port: str = "", api_key: str = "") -> dict`
+Get current printer state and temperature readings.
+
+**Parameters:**
+- `host` (str): OctoPrint server hostname/IP (empty to use config default)
+- `port` (str): OctoPrint port as string (empty to use config default)
+- `api_key` (str): OctoPrint API key (empty to use config default)
+
+**Returns:** dict with keys:
+- `status` (str): "ok" or "error"
+- `state` (str): Printer state ("Operational", "Printing", "Paused", "Offline", etc.)
+- `bed_temp` (dict or null): `{"current": float, "target": float}` or null if unavailable
+- `nozzle_temp` (dict or null): `{"current": float, "target": float}` or null if unavailable
+- `message` (str): Human-readable status or error message
+
+**Example Response:**
+```json
+{
+  "status": "ok",
+  "state": "Printing",
+  "bed_temp": {
+    "current": 60.0,
+    "target": 60
+  },
+  "nozzle_temp": {
+    "current": 210.0,
+    "target": 210
+  },
+  "message": "Printer state: Printing"
+}
+```
+
+**Error Handling:** Returns error dict with message rather than raising exceptions
+
+---
+
+#### `get_job_status(host: str = "", port: str = "", api_key: str = "") -> dict`
+Get active print job information and progress.
+
+**Parameters:**
+- `host` (str): OctoPrint server hostname/IP (empty to use config default)
+- `port` (str): OctoPrint port as string (empty to use config default)
+- `api_key` (str): OctoPrint API key (empty to use config default)
+
+**Returns:** dict with keys:
+- `status` (str): "ok" or "error"
+- `state` (str or null): Job state ("Printing", "Paused", etc.) or null if no active job
+- `progress` (dict or null): Progress information or null if no active job
+  - `completion` (float): Percentage complete (0-100)
+  - `filepos` (int): Current position in file (bytes)
+  - `printtime` (int): Elapsed print time (seconds)
+  - `printtime_left` (int): Estimated remaining time (seconds)
+- `filename` (str or null): Current print filename or null if no active job
+- `message` (str): Human-readable status or error message
+
+**Example Response - Active Job:**
+```json
+{
+  "status": "ok",
+  "state": "Printing",
+  "progress": {
+    "completion": 45.5,
+    "filepos": 123456,
+    "printtime": 1800,
+    "printtime_left": 2200
+  },
+  "filename": "phone_stand.gcode",
+  "message": "Job state: Printing"
+}
+```
+
+**Example Response - No Active Job:**
+```json
+{
+  "status": "ok",
+  "state": null,
+  "progress": null,
+  "filename": null,
+  "message": "No active print job"
+}
+```
+
+**Error Handling:** Returns error dict with message rather than raising exceptions
+
+---
+
+**OctoPrintClient Class:**
+Internal class used by tool functions. Provides low-level OctoPrint API access.
+
+**Constructor:**
+```python
+client = OctoPrintClient(host: str, port: int, api_key: str)
+```
+
+**Methods:**
+- `test_connection() -> dict` — Test server connectivity
+- `get_printer_status() -> dict` — Get printer state and temps
+- `get_job_status() -> dict` — Get active job information
+
+**Validation:** Constructor validates all parameters and raises `ValueError` if invalid
+
+---
+
+**Configuration:**
+Configure OctoPrint connection via environment variables or `.env` file:
+```bash
+OCTOPRINT_HOST=192.168.1.100
+OCTOPRINT_PORT=5000
+OCTOPRINT_API_KEY=your-api-key-here
+```
+
+Optional config variables (with defaults):
+- `OCTOPRINT_HOST` (default: "localhost")
+- `OCTOPRINT_PORT` (default: "5000")
+- `OCTOPRINT_API_KEY` (no default; must be provided)
+
+**Requirements:**
+- OctoPrint server must be running and accessible
+- Valid API key required for authentication
+- Network connectivity to printer server
+
+---
+
+**Output Structure:**
+Monitor phase outputs stored in `{PROJECTS_DIR}/{project_name}/print/`:
+```
+print/
+├── print_history.json       # Historical print records
+├── connection_log.json      # Connection test results
+└── metrics/                 # Real-time metrics (added by TICKET-017)
+```
 
 See: [../specs/MONITOR_AGENT_SPEC.md](../specs/MONITOR_AGENT_SPEC.md)
 
