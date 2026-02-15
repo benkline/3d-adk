@@ -23,11 +23,11 @@ class TestModelingAgent:
         from src.agents.modeling import modeling_agent
         assert modeling_agent.name == "modeling_phase_agent"
 
-    def test_modeling_agent_has_six_tools(self):
-        """Test that modeling agent has six tools."""
+    def test_modeling_agent_has_seven_tools(self):
+        """Test that modeling agent has seven tools."""
         os.environ["ANTHROPIC_API_KEY"] = "test_key"
         from src.agents.modeling import modeling_agent
-        assert len(modeling_agent.tools) == 6
+        assert len(modeling_agent.tools) == 7
 
     def test_modeling_agent_uses_config_model(self):
         """Test that modeling agent uses configured LLM model."""
