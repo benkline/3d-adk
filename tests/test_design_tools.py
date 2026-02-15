@@ -45,7 +45,7 @@ def reset_imports(mock_projects_dir):
 
 
 # Now we can import the functions
-from src.tools.design_tools import conduct_interview, generate_sketches, generate_images
+from src.tools.design_tools import conduct_interview, generate_sketches, generate_images, generate_blueprint
 
 
 class TestInterviewMode:
@@ -508,3 +508,176 @@ class TestImageGeneration:
         assert image_record["image_path"] is None
         assert isinstance(image_record["prompt"], str)
         assert len(image_record["prompt"]) > 0
+
+
+class TestBlueprintGeneration:
+    """Test suite for generate_blueprint function."""
+
+    @pytest.mark.asyncio
+    async def test_generate_blueprint_empty_project_name_returns_error(self, mock_projects_dir):
+        """Empty project name should return error."""
+        design_brief = {"name": "test", "purpose": "test"}
+        result = await generate_blueprint("", design_brief, [])
+
+        assert result["status"] == "error"
+        assert "message" in result
+
+    @pytest.mark.asyncio
+    async def test_generate_blueprint_empty_design_brief_returns_error(self, mock_projects_dir):
+        """Empty design brief should return error."""
+        result = await generate_blueprint("test-project", {}, [])
+
+        assert result["status"] == "error"
+        assert "message" in result
+
+    @pytest.mark.asyncio
+    async def test_generate_blueprint_returns_ok_status(self, mock_projects_dir):
+        """generate_blueprint should return ok status."""
+        design_brief = {
+            "name": "phone stand",
+            "purpose": "desk organization",
+            "dimensions": {"width": 100, "height": 80, "depth": 60},
+            "materials": ["PLA"],
+            "aesthetics": "minimalist",
+            "constraints": ["must fit iPhone 14"],
+            "special_requirements": []
+        }
+
+        result = await generate_blueprint("test-project", design_brief, [])
+
+        assert result["status"] == "ok"
+        assert "blueprint_path" in result
+        assert "specs_path" in result
+
+    @pytest.mark.asyncio
+    async def test_generate_blueprint_creates_blueprint_file(self, mock_projects_dir):
+        """generate_blueprint should create blueprint.md file."""
+        design_brief = {
+            "name": "test device",
+            "purpose": "testing",
+            "dimensions": {"width": 100, "height": 80, "depth": 60},
+            "materials": ["PLA"],
+            "aesthetics": "functional",
+            "constraints": [],
+            "special_requirements": []
+        }
+
+        result = await generate_blueprint("test-project", design_brief, [])
+
+        blueprint_path = Path(mock_projects_dir) / "test-project" / "design" / "blueprint.md"
+        assert blueprint_path.exists(), f"blueprint.md not created at {blueprint_path}"
+
+        with open(blueprint_path) as f:
+            content = f.read()
+        assert len(content) > 0
+        assert "Blueprint:" in content
+
+    @pytest.mark.asyncio
+    async def test_generate_blueprint_creates_specs_file(self, mock_projects_dir):
+        """generate_blueprint should create design_specs.json file."""
+        design_brief = {
+            "name": "test device",
+            "purpose": "testing",
+            "dimensions": {"width": 100, "height": 80, "depth": 60},
+            "materials": ["PETG"],
+            "aesthetics": "functional",
+            "constraints": ["strong"],
+            "special_requirements": []
+        }
+
+        result = await generate_blueprint("test-project", design_brief, [])
+
+        specs_path = Path(mock_projects_dir) / "test-project" / "design" / "design_specs.json"
+        assert specs_path.exists(), f"design_specs.json not created at {specs_path}"
+
+        with open(specs_path) as f:
+            specs_data = json.load(f)
+        assert len(specs_data) > 0
+
+    @pytest.mark.asyncio
+    async def test_generate_blueprint_specs_has_required_keys(self, mock_projects_dir):
+        """design_specs.json should have all required keys."""
+        design_brief = {
+            "name": "phone stand",
+            "purpose": "desk organization",
+            "dimensions": {"width": 100, "height": 80, "depth": 60},
+            "materials": ["PLA"],
+            "aesthetics": "minimalist",
+            "constraints": [],
+            "special_requirements": []
+        }
+
+        result = await generate_blueprint("test-project", design_brief, ["image_001", "image_002"])
+
+        specs_path = Path(mock_projects_dir) / "test-project" / "design" / "design_specs.json"
+        with open(specs_path) as f:
+            specs_data = json.load(f)
+
+        # Verify required keys
+        required_keys = {"project_id", "project_name", "created_at", "design_brief",
+                         "specifications", "approved_images", "parts", "assembly_instructions"}
+        assert set(specs_data.keys()) == required_keys
+
+        # Verify nested keys
+        assert "material" in specs_data["specifications"]
+        assert "wall_thickness_mm" in specs_data["specifications"]
+        assert "infill_percentage" in specs_data["specifications"]
+        assert "print_orientation" in specs_data["specifications"]
+        assert "supports_required" in specs_data["specifications"]
+        assert "estimated_weight_g" in specs_data["specifications"]
+        assert "estimated_print_time_hours" in specs_data["specifications"]
+
+        # Verify approved_images passed through
+        assert specs_data["approved_images"] == ["image_001", "image_002"]
+
+    @pytest.mark.asyncio
+    async def test_generate_blueprint_blueprint_contains_required_sections(self, mock_projects_dir):
+        """blueprint.md should contain all required sections."""
+        design_brief = {
+            "name": "phone stand",
+            "purpose": "desk organization",
+            "dimensions": {"width": 100, "height": 80, "depth": 60},
+            "materials": ["PLA"],
+            "aesthetics": "minimalist",
+            "constraints": ["must fit iPhone 14"],
+            "special_requirements": ["anti-slip base"]
+        }
+
+        await generate_blueprint("test-project", design_brief, [])
+
+        blueprint_path = Path(mock_projects_dir) / "test-project" / "design" / "blueprint.md"
+        with open(blueprint_path) as f:
+            content = f.read()
+
+        # Check for required sections
+        assert "## Design Summary" in content
+        assert "## Specifications" in content
+        assert "## Print Parameters" in content
+        assert "Overall Dimensions:" in content
+        assert "Material:" in content
+        assert "Wall Thickness:" in content
+        assert "Infill:" in content
+        assert "Orientation:" in content
+        assert "Estimated Print Time:" in content
+        assert "Estimated Weight:" in content
+
+    @pytest.mark.asyncio
+    async def test_generate_blueprint_handles_none_approved_images(self, mock_projects_dir):
+        """generate_blueprint should handle None approved_images gracefully."""
+        design_brief = {
+            "name": "test device",
+            "purpose": "testing",
+            "dimensions": {"width": 100, "height": 80, "depth": 60},
+            "materials": ["PLA"],
+            "aesthetics": "functional",
+            "constraints": [],
+            "special_requirements": []
+        }
+
+        result = await generate_blueprint("test-project", design_brief, None)
+
+        assert result["status"] == "ok"
+        specs_path = Path(mock_projects_dir) / "test-project" / "design" / "design_specs.json"
+        with open(specs_path) as f:
+            specs_data = json.load(f)
+        assert specs_data["approved_images"] == []

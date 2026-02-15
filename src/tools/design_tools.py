@@ -688,17 +688,184 @@ async def generate_images(
         }
 
 
+def _get_blueprint_design_dir(project_name: str) -> Path:
+    """Get/create the design directory for blueprint output."""
+    design_dir = Path(PROJECTS_DIR) / project_name / "design"
+    design_dir.mkdir(parents=True, exist_ok=True)
+    return design_dir
+
+
+def _calculate_specifications(design_brief: dict) -> dict:
+    """Calculate derived spec values from design brief.
+
+    Args:
+        design_brief: Design brief dict with object details
+
+    Returns:
+        dict with calculated specifications
+    """
+    dims = design_brief.get("dimensions", {})
+    materials = design_brief.get("materials", ["PLA"])
+    constraints = design_brief.get("constraints", [])
+    special_reqs = design_brief.get("special_requirements", [])
+
+    # Calculate wall thickness based on material (PLA default 2mm, PETG 2.5mm, Resin 1.5mm)
+    material = materials[0] if materials else "PLA"
+    wall_thickness = {"PETG": 2.5, "Resin": 1.5}.get(material, 2.0)
+
+    # Calculate infill based on purpose/constraints
+    infill = 20  # default
+    if any("strong" in c.lower() or "load" in c.lower() for c in constraints + special_reqs):
+        infill = 40
+
+    # Estimate weight from volume (rough approximation)
+    try:
+        width = float(dims.get("width", 100))
+        height = float(dims.get("height", 100))
+        depth = float(dims.get("depth", 100))
+    except (ValueError, TypeError):
+        width = height = depth = 100
+
+    volume_cm3 = (width * height * depth / 1000) * (infill / 100)
+    density = {"PETG": 1.27, "Resin": 1.2}.get(material, 1.24)  # g/cm³
+    weight_g = round(volume_cm3 * density, 1)
+
+    # Estimate print time (very rough: ~10g per hour for average prints)
+    print_time = round(weight_g / 10, 1)  # hours
+
+    # Determine support requirement
+    needs_supports = False  # default; real detection would need geometry
+
+    # Determine orientation
+    orientation = "flat"  # default
+
+    return {
+        "overall_dimensions": dims,
+        "material": material,
+        "wall_thickness_mm": wall_thickness,
+        "infill_percentage": infill,
+        "print_orientation": orientation,
+        "supports_required": needs_supports,
+        "support_type": "tree" if needs_supports else "none",
+        "estimated_weight_g": weight_g,
+        "estimated_print_time_hours": print_time,
+    }
+
+
+def _generate_blueprint_markdown(
+    project_name: str,
+    design_brief: dict,
+    specifications: dict,
+    has_assembly: bool = False
+) -> str:
+    """Generate the blueprint markdown document.
+
+    Args:
+        project_name: Name of the project
+        design_brief: Design brief dict
+        specifications: Calculated specifications dict
+        has_assembly: Whether the design has multiple parts
+
+    Returns:
+        str with markdown content
+    """
+    dims = specifications["overall_dimensions"]
+    now = datetime.now().strftime("%Y-%m-%d")
+    constraints = design_brief.get("constraints", [])
+    special_reqs = design_brief.get("special_requirements", [])
+
+    lines = [
+        f"# Blueprint: {project_name}",
+        f"*Generated: {now}*",
+        "",
+        "## Design Summary",
+        f"- **Purpose:** {design_brief.get('purpose', 'Not specified')}",
+        f"- **Aesthetics:** {design_brief.get('aesthetics', 'Not specified')}",
+    ]
+    if constraints:
+        lines.append(f"- **Constraints:** {', '.join(constraints)}")
+    if special_reqs:
+        lines.append(f"- **Special Requirements:** {', '.join(special_reqs)}")
+
+    lines += [
+        "",
+        "## Specifications",
+        f"- **Overall Dimensions:** {dims.get('width')}mm × {dims.get('height')}mm × {dims.get('depth')}mm",
+        f"- **Material:** {specifications['material']}",
+        f"- **Wall Thickness:** {specifications['wall_thickness_mm']}mm",
+        f"- **Infill:** {specifications['infill_percentage']}%",
+        "",
+        "## Print Parameters",
+        f"- **Orientation:** {specifications['print_orientation']}",
+        f"- **Supports:** {'Yes (' + specifications['support_type'] + ')' if specifications['supports_required'] else 'No'}",
+        f"- **Estimated Print Time:** {specifications['estimated_print_time_hours']} hours",
+        f"- **Estimated Weight:** {specifications['estimated_weight_g']}g",
+    ]
+
+    if has_assembly:
+        lines += [
+            "",
+            "## Assembly",
+            "See assembly instructions in the parts list below.",
+        ]
+
+    lines += [
+        "",
+        "## Notes",
+        "- Verify dimensions match real-world fit requirements before printing.",
+        "- Adjust infill and wall thickness based on functional requirements.",
+    ]
+
+    return "\n".join(lines)
+
+
+def _generate_specs_json(
+    project_name: str,
+    design_brief: dict,
+    specifications: dict,
+    approved_images: list
+) -> dict:
+    """Generate the specs.json structure for the modeling agent.
+
+    Args:
+        project_name: Name of the project
+        design_brief: Design brief dict
+        specifications: Calculated specifications dict
+        approved_images: List of approved image IDs
+
+    Returns:
+        dict with JSON-serializable specification structure
+    """
+    return {
+        "project_id": str(uuid.uuid4()),
+        "project_name": project_name,
+        "created_at": datetime.now().isoformat(),
+        "design_brief": design_brief,
+        "specifications": specifications,
+        "approved_images": approved_images,
+        "parts": [
+            {
+                "name": "main_body",
+                "quantity": 1,
+                "dimensions": specifications.get("overall_dimensions", {}),
+                "tolerance_mm": 0.2,
+            }
+        ],
+        "assembly_instructions": [],
+    }
+
+
 async def generate_blueprint(
     project_name: str,
     design_brief: dict,
-    approved_images: list
+    approved_images: list = None
 ) -> dict:
     """Generate formal technical blueprint and specifications.
 
     Args:
         project_name: Name of the project
         design_brief: Design brief dict with object details
-        approved_images: List of approved image IDs
+        approved_images: List of approved image IDs (optional)
 
     Returns:
         dict with keys:
@@ -708,7 +875,7 @@ async def generate_blueprint(
         - message: str (if status is "error")
     """
     logger.info(
-        f"generate_blueprint called: project={project_name}, brief_keys={list(design_brief.keys())}, images={len(approved_images)}"
+        f"generate_blueprint called: project={project_name}, brief_keys={list(design_brief.keys())}, images={len(approved_images or [])}"
     )
 
     # Validate inputs
@@ -726,10 +893,54 @@ async def generate_blueprint(
             "message": "design_brief must be a non-empty dict"
         }
 
-    # Stub implementation: return placeholder paths
-    logger.info(f"generate_blueprint: returning ok for {project_name}")
-    return {
-        "status": "ok",
-        "blueprint_path": f"./projects/{project_name}/design/blueprint.md",
-        "specs_path": f"./projects/{project_name}/design/specs.json"
-    }
+    try:
+        # Get/create design directory
+        design_dir = _get_blueprint_design_dir(project_name)
+
+        # Calculate specifications
+        specifications = _calculate_specifications(design_brief)
+
+        # Check if multi-part (for future enhancement)
+        has_assembly = len(design_brief.get("special_requirements", [])) > 0
+
+        # Generate markdown blueprint
+        blueprint_md = _generate_blueprint_markdown(
+            project_name,
+            design_brief,
+            specifications,
+            has_assembly
+        )
+
+        # Write blueprint.md
+        blueprint_path = design_dir / "blueprint.md"
+        with open(blueprint_path, "w") as f:
+            f.write(blueprint_md)
+
+        # Generate specs.json
+        specs_data = _generate_specs_json(
+            project_name,
+            design_brief,
+            specifications,
+            approved_images or []
+        )
+
+        # Write design_specs.json
+        specs_path = design_dir / "design_specs.json"
+        with open(specs_path, "w") as f:
+            json.dump(specs_data, f, indent=2)
+
+        logger.info(f"generate_blueprint: created blueprint and specs for {project_name}")
+
+        return {
+            "status": "ok",
+            "blueprint_path": str(blueprint_path),
+            "specs_path": str(specs_path),
+            "message": f"Generated blueprint and specifications for {project_name}"
+        }
+
+    except Exception as e:
+        logger.error(f"generate_blueprint: error for {project_name}: {str(e)}", exc_info=True)
+        return {
+            "status": "error",
+            "message": f"Failed to generate blueprint: {str(e)}"
+        }
