@@ -1,12 +1,24 @@
 """Monitor phase tools for OctoPrint API integration and print monitoring."""
 
+import json
 import logging
+import os
 import time
+from pathlib import Path
 from typing import Optional
 
 from octorest import OctoRest
 
 from src.config import OCTOPRINT_HOST, OCTOPRINT_PORT, OCTOPRINT_API_KEY
+
+# Project directory for storing metrics (patchable in tests)
+PROJECTS_DIR = os.getenv("PROJECTS_DIR", "./projects")
+
+# Configurable detection thresholds (patchable in tests via environment variables)
+TEMP_DEVIATION_THRESHOLD_C = float(os.getenv("TEMP_DEVIATION_THRESHOLD_C", "10.0"))
+TEMP_DEVIATION_DURATION_S = int(os.getenv("TEMP_DEVIATION_DURATION_S", "30"))
+FILAMENT_STALL_DURATION_S = int(os.getenv("FILAMENT_STALL_DURATION_S", "60"))
+LAYER_SHIFT_THRESHOLD_MM = float(os.getenv("LAYER_SHIFT_THRESHOLD_MM", "5.0"))
 
 logger = logging.getLogger(__name__)
 
@@ -383,3 +395,291 @@ def get_job_status(host: str = "", port: str = "", api_key: str = "") -> dict:
     except Exception as e:
         logger.error(f"get_job_status: unexpected error: {str(e)}", exc_info=True)
         return {"status": "error", "message": f"Unexpected error: {str(e)}"}
+
+
+# ============================================================================
+# ISSUE DETECTION TOOLS (TICKET-018)
+# ============================================================================
+
+def _get_monitor_dir(project_name: str) -> Path:
+    """Return monitoring directory path, creating it if needed."""
+    monitor_dir = Path(PROJECTS_DIR) / project_name / "monitoring"
+    monitor_dir.mkdir(parents=True, exist_ok=True)
+    return monitor_dir
+
+
+def _detect_temperature_anomalies(snapshots: list) -> list:
+    """Detect sustained temperature deviations exceeding threshold."""
+    issues = []
+    if len(snapshots) < 2:
+        return issues
+
+    deviation_start_idx = None
+    deviation_start_elapsed = None
+
+    for i, snapshot in enumerate(snapshots):
+        nozzle = snapshot.get("nozzle_temp", {})
+        bed = snapshot.get("bed_temp", {})
+        elapsed = snapshot.get("print_time_elapsed", 0)
+
+        nozzle_current = nozzle.get("current") if nozzle else None
+        nozzle_target = nozzle.get("target") if nozzle else None
+        bed_current = bed.get("current") if bed else None
+        bed_target = bed.get("target") if bed else None
+
+        has_deviation = False
+        deviation_detail = ""
+
+        if nozzle_current and nozzle_target:
+            nozzle_diff = abs(nozzle_current - nozzle_target)
+            if nozzle_diff > TEMP_DEVIATION_THRESHOLD_C:
+                has_deviation = True
+                deviation_detail = f"Nozzle {nozzle_diff:.1f}°C"
+
+        if bed_current and bed_target:
+            bed_diff = abs(bed_current - bed_target)
+            if bed_diff > TEMP_DEVIATION_THRESHOLD_C:
+                has_deviation = True
+                if deviation_detail:
+                    deviation_detail += f" / Bed {bed_diff:.1f}°C"
+                else:
+                    deviation_detail = f"Bed {bed_diff:.1f}°C"
+
+        if has_deviation:
+            if deviation_start_idx is None:
+                deviation_start_idx = i
+                deviation_start_elapsed = elapsed
+        else:
+            deviation_start_idx = None
+            deviation_start_elapsed = None
+
+        # Check if deviation has lasted long enough
+        if deviation_start_idx is not None and i > deviation_start_idx:
+            duration = elapsed - deviation_start_elapsed
+            if duration > TEMP_DEVIATION_DURATION_S:
+                issues.append({
+                    "type": "temperature_deviation",
+                    "severity": "warning",
+                    "message": f"{deviation_detail} deviation detected for {duration:.0f}s",
+                    "detected_at": i,
+                    "data": {
+                        "nozzle_temp": nozzle if nozzle else None,
+                        "bed_temp": bed if bed else None,
+                        "duration_seconds": duration
+                    }
+                })
+                deviation_start_idx = None  # Reset to avoid repeated alerts
+
+    return issues
+
+
+def _detect_filament_stall(snapshots: list) -> list:
+    """Detect periods of stalled filament extrusion while printing."""
+    issues = []
+    if len(snapshots) < 2:
+        return issues
+
+    stall_start_idx = None
+    stall_start_elapsed = None
+    stall_start_progress = None
+
+    for i, snapshot in enumerate(snapshots):
+        state = snapshot.get("state", "")
+        progress = snapshot.get("progress", 0)
+        elapsed = snapshot.get("print_time_elapsed", 0)
+
+        is_printing = state == "Printing"
+        is_stalled = (is_printing and
+                      stall_start_progress is not None and
+                      abs(progress - stall_start_progress) < 0.1)  # Progress hasn't advanced
+
+        if is_printing and stall_start_idx is None:
+            stall_start_idx = i
+            stall_start_elapsed = elapsed
+            stall_start_progress = progress
+        elif is_printing and stall_start_idx is not None and is_stalled:
+            duration = elapsed - stall_start_elapsed
+            if duration > FILAMENT_STALL_DURATION_S:
+                issues.append({
+                    "type": "filament_jam",
+                    "severity": "error",
+                    "message": f"Filament extrusion stalled for {duration:.0f}s at {progress:.1f}% progress",
+                    "detected_at": i,
+                    "data": {
+                        "progress": progress,
+                        "duration_seconds": duration,
+                        "state": state
+                    }
+                })
+                stall_start_idx = None
+                stall_start_elapsed = None
+                stall_start_progress = None
+        else:
+            stall_start_idx = None
+            stall_start_elapsed = None
+            stall_start_progress = None
+
+    return issues
+
+
+def _detect_bed_adhesion_issues(snapshots: list) -> list:
+    """Detect bed adhesion problems in early printing stages."""
+    issues = []
+    if not snapshots:
+        return issues
+
+    # Only examine first few snapshots (progress < 10%)
+    early_phase_snapshots = [s for s in snapshots if s.get("progress", 0) < 10.0]
+    if not early_phase_snapshots:
+        return issues
+
+    for i, snapshot in enumerate(early_phase_snapshots):
+        bed = snapshot.get("bed_temp", {})
+        state = snapshot.get("state", "")
+        progress = snapshot.get("progress", 0)
+
+        bed_current = bed.get("current") if bed else None
+        bed_target = bed.get("target") if bed else None
+
+        # Check 1: Sudden bed temperature drop during early print
+        if bed_current and bed_target:
+            bed_diff = bed_target - bed_current
+            if bed_diff > 5.0:  # More than 5°C drop
+                issues.append({
+                    "type": "bed_adhesion_risk",
+                    "severity": "warning",
+                    "message": f"Bed temperature dropped {bed_diff:.1f}°C during early print at {progress:.1f}%",
+                    "detected_at": i,
+                    "data": {
+                        "bed_temp": bed,
+                        "progress": progress
+                    }
+                })
+
+        # Check 2: Print stopped during early stage
+        if state not in ("Printing", "Paused") and progress < 5.0:
+            issues.append({
+                "type": "early_print_failure",
+                "severity": "warning",
+                "message": f"Print transitioned to {state} at {progress:.1f}% progress - possible bed adhesion failure",
+                "detected_at": i,
+                "data": {
+                    "state": state,
+                    "progress": progress
+                }
+            })
+            break
+
+    return issues
+
+
+def _detect_layer_shift(snapshots: list) -> list:
+    """Detect layer shifts indicated by unexpected time changes."""
+    issues = []
+    if len(snapshots) < 2:
+        return issues
+
+    for i in range(1, len(snapshots)):
+        prev_elapsed = snapshots[i - 1].get("print_time_elapsed", 0)
+        curr_elapsed = snapshots[i].get("print_time_elapsed", 0)
+        curr_progress = snapshots[i].get("progress", 0)
+        prev_progress = snapshots[i - 1].get("progress", 0)
+
+        # Detect time reset/jump (non-monotonic)
+        if curr_elapsed < prev_elapsed:
+            issues.append({
+                "type": "layer_shift",
+                "severity": "error",
+                "message": f"Detected possible layer shift: print time jumped backward at {curr_progress:.1f}%",
+                "detected_at": i,
+                "data": {
+                    "previous_elapsed": prev_elapsed,
+                    "current_elapsed": curr_elapsed,
+                    "progress": curr_progress
+                }
+            })
+
+    return issues
+
+
+async def detect_print_issues(project_name: str, metrics_path: Optional[str] = None) -> dict:
+    """Analyze collected metrics to detect print issues.
+
+    Args:
+        project_name: Name of the project being monitored
+        metrics_path: Optional override path to metrics.jsonl file
+
+    Returns:
+        dict with status, issues_detected (list), and alert_count
+    """
+    # Validate input
+    if not project_name:
+        logger.warning("detect_print_issues: empty project_name")
+        return {
+            "status": "error",
+            "message": "project_name is required"
+        }
+
+    # Locate metrics file
+    if metrics_path:
+        metrics_file = Path(metrics_path)
+    else:
+        metrics_file = _get_monitor_dir(project_name) / "metrics.jsonl"
+
+    # If no metrics yet, return ok with no issues
+    if not metrics_file.exists():
+        logger.info(f"detect_print_issues: no metrics file found at {metrics_file}")
+        return {
+            "status": "ok",
+            "issues_detected": [],
+            "alert_count": 0,
+            "message": "No metrics available for analysis"
+        }
+
+    # Parse JSONL metrics
+    snapshots = []
+    try:
+        with open(metrics_file) as f:
+            for line_num, line in enumerate(f, 1):
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    snapshots.append(json.loads(line))
+                except json.JSONDecodeError:
+                    logger.warning(f"detect_print_issues: skipping malformed line {line_num} in {metrics_file}")
+                    continue
+    except Exception as e:
+        logger.error(f"detect_print_issues: error reading metrics file: {str(e)}", exc_info=True)
+        return {
+            "status": "error",
+            "message": f"Error reading metrics file: {str(e)}"
+        }
+
+    if not snapshots:
+        logger.info(f"detect_print_issues: no valid snapshots in {metrics_file}")
+        return {
+            "status": "ok",
+            "issues_detected": [],
+            "alert_count": 0,
+            "message": "No valid metrics for analysis"
+        }
+
+    # Run detection algorithms
+    issues = []
+    issues.extend(_detect_temperature_anomalies(snapshots))
+    issues.extend(_detect_filament_stall(snapshots))
+    issues.extend(_detect_bed_adhesion_issues(snapshots))
+    issues.extend(_detect_layer_shift(snapshots))
+
+    # Count alerts
+    alert_count = len([i for i in issues if i["severity"] in ("warning", "error")])
+
+    logger.info(f"detect_print_issues: analysis complete for {project_name} - {len(issues)} issue(s) detected")
+
+    return {
+        "status": "ok",
+        "issues_detected": issues,
+        "alert_count": alert_count,
+        "message": f"Analysis complete: {len(issues)} issue(s) detected"
+    }
