@@ -683,3 +683,325 @@ async def detect_print_issues(project_name: str, metrics_path: Optional[str] = N
         "alert_count": alert_count,
         "message": f"Analysis complete: {len(issues)} issue(s) detected"
     }
+
+
+# ============================================================================
+# USER ALERTS & INTERVENTION TOOLS (TICKET-019)
+# ============================================================================
+
+# Mapping of issue types to user-facing recommended actions
+ISSUE_ACTION_MAP = {
+    "temperature_deviation": "Check and adjust nozzle/bed temperature",
+    "filament_jam": "Pause print and inspect filament path",
+    "layer_shift": "Pause print and inspect print bed adhesion",
+    "bed_adhesion_risk": "Monitor closely; consider pausing to re-level bed",
+    "early_print_failure": "Review first layers; consider canceling and restarting",
+}
+
+
+def _load_alerts(alerts_file: Path) -> list:
+    """Load existing alerts from JSON file."""
+    if not alerts_file.exists():
+        return []
+    try:
+        with open(alerts_file) as f:
+            return json.load(f)
+    except (json.JSONDecodeError, IOError):
+        return []
+
+
+def _load_interventions(interventions_file: Path) -> list:
+    """Load existing interventions from JSON file."""
+    if not interventions_file.exists():
+        return []
+    try:
+        with open(interventions_file) as f:
+            return json.load(f)
+    except (json.JSONDecodeError, IOError):
+        return []
+
+
+async def format_alert(project_name: str, issues: list) -> dict:
+    """Format detected issues into user-readable alerts and persist them.
+
+    Args:
+        project_name: Name of the project being monitored
+        issues: List of issues from detect_print_issues (each with type, severity, message)
+
+    Returns:
+        dict with status, alerts (list), and alert_count
+    """
+    if not project_name:
+        logger.warning("format_alert: empty project_name")
+        return {"status": "error", "message": "project_name is required"}
+
+    if not isinstance(issues, list):
+        logger.warning("format_alert: issues must be a list")
+        return {"status": "error", "message": "issues must be a list"}
+
+    try:
+        monitor_dir = _get_monitor_dir(project_name)
+        alerts_file = monitor_dir / "alerts.json"
+
+        # Load existing alerts
+        existing_alerts = _load_alerts(alerts_file)
+
+        # Format new alerts from issues
+        new_alerts = []
+        timestamp_ms = int(time.time() * 1000)
+        timestamp_iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(timestamp_ms / 1000))
+
+        for i, issue in enumerate(issues):
+            alert_id = f"{issue.get('type', 'unknown')}_{timestamp_ms + i}"
+            alert = {
+                "alert_id": alert_id,
+                "severity": issue.get("severity", "warning"),
+                "message": issue.get("message", "Unknown issue detected"),
+                "recommended_action": ISSUE_ACTION_MAP.get(
+                    issue.get("type"), "Inspect printer and review print status"
+                ),
+                "timestamp": timestamp_iso,
+                "issue_type": issue.get("type", "unknown"),
+            }
+            new_alerts.append(alert)
+
+        # Append to persistent storage
+        all_alerts = existing_alerts + new_alerts
+        with open(alerts_file, "w") as f:
+            json.dump(all_alerts, f, indent=2)
+
+        logger.info(f"format_alert: {len(new_alerts)} alert(s) formatted for {project_name}")
+
+        return {
+            "status": "ok",
+            "alerts": new_alerts,
+            "alert_count": len(new_alerts),
+            "message": f"Formatted {len(new_alerts)} alert(s)"
+        }
+    except Exception as e:
+        logger.error(f"format_alert: unexpected error: {str(e)}", exc_info=True)
+        return {"status": "error", "message": f"Error formatting alerts: {str(e)}"}
+
+
+async def pause_print(
+    project_name: str, host: str = "", port: str = "", api_key: str = ""
+) -> dict:
+    """Pause the current print job.
+
+    Args:
+        project_name: Name of the project being monitored
+        host: OctoPrint server hostname (empty to use config default)
+        port: OctoPrint server port (empty to use config default)
+        api_key: OctoPrint API key (empty to use config default)
+
+    Returns:
+        dict with status and action taken
+    """
+    if not project_name:
+        logger.warning("pause_print: empty project_name")
+        return {"status": "error", "message": "project_name is required"}
+
+    try:
+        final_host, final_port, final_api_key = _get_connection_params(host, port, api_key)
+        client = OctoPrintClient(final_host, final_port, final_api_key)
+        client._get_client().pause()
+
+        # Log intervention
+        monitor_dir = _get_monitor_dir(project_name)
+        interventions_file = monitor_dir / "interventions.json"
+        interventions = _load_interventions(interventions_file)
+        interventions.append({
+            "action": "pause",
+            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "status": "ok"
+        })
+        with open(interventions_file, "w") as f:
+            json.dump(interventions, f, indent=2)
+
+        logger.info(f"pause_print: print paused for {project_name}")
+        return {
+            "status": "ok",
+            "message": "Print paused successfully",
+            "action": "pause"
+        }
+    except ValueError as e:
+        logger.warning(f"pause_print: invalid parameters: {str(e)}")
+        return {"status": "error", "message": f"Invalid parameters: {str(e)}"}
+    except Exception as e:
+        logger.error(f"pause_print: unexpected error: {str(e)}", exc_info=True)
+        return {"status": "error", "message": f"Error pausing print: {str(e)}"}
+
+
+async def resume_print(
+    project_name: str, host: str = "", port: str = "", api_key: str = ""
+) -> dict:
+    """Resume a paused print job.
+
+    Args:
+        project_name: Name of the project being monitored
+        host: OctoPrint server hostname (empty to use config default)
+        port: OctoPrint server port (empty to use config default)
+        api_key: OctoPrint API key (empty to use config default)
+
+    Returns:
+        dict with status and action taken
+    """
+    if not project_name:
+        logger.warning("resume_print: empty project_name")
+        return {"status": "error", "message": "project_name is required"}
+
+    try:
+        final_host, final_port, final_api_key = _get_connection_params(host, port, api_key)
+        client = OctoPrintClient(final_host, final_port, final_api_key)
+        client._get_client().resume()
+
+        # Log intervention
+        monitor_dir = _get_monitor_dir(project_name)
+        interventions_file = monitor_dir / "interventions.json"
+        interventions = _load_interventions(interventions_file)
+        interventions.append({
+            "action": "resume",
+            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "status": "ok"
+        })
+        with open(interventions_file, "w") as f:
+            json.dump(interventions, f, indent=2)
+
+        logger.info(f"resume_print: print resumed for {project_name}")
+        return {
+            "status": "ok",
+            "message": "Print resumed successfully",
+            "action": "resume"
+        }
+    except ValueError as e:
+        logger.warning(f"resume_print: invalid parameters: {str(e)}")
+        return {"status": "error", "message": f"Invalid parameters: {str(e)}"}
+    except Exception as e:
+        logger.error(f"resume_print: unexpected error: {str(e)}", exc_info=True)
+        return {"status": "error", "message": f"Error resuming print: {str(e)}"}
+
+
+async def cancel_print(
+    project_name: str, host: str = "", port: str = "", api_key: str = ""
+) -> dict:
+    """Cancel the current print job.
+
+    Args:
+        project_name: Name of the project being monitored
+        host: OctoPrint server hostname (empty to use config default)
+        port: OctoPrint server port (empty to use config default)
+        api_key: OctoPrint API key (empty to use config default)
+
+    Returns:
+        dict with status and action taken
+    """
+    if not project_name:
+        logger.warning("cancel_print: empty project_name")
+        return {"status": "error", "message": "project_name is required"}
+
+    try:
+        final_host, final_port, final_api_key = _get_connection_params(host, port, api_key)
+        client = OctoPrintClient(final_host, final_port, final_api_key)
+        client._get_client().cancel()
+
+        # Log intervention
+        monitor_dir = _get_monitor_dir(project_name)
+        interventions_file = monitor_dir / "interventions.json"
+        interventions = _load_interventions(interventions_file)
+        interventions.append({
+            "action": "cancel",
+            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "status": "ok"
+        })
+        with open(interventions_file, "w") as f:
+            json.dump(interventions, f, indent=2)
+
+        logger.info(f"cancel_print: print canceled for {project_name}")
+        return {
+            "status": "ok",
+            "message": "Print canceled successfully",
+            "action": "cancel"
+        }
+    except ValueError as e:
+        logger.warning(f"cancel_print: invalid parameters: {str(e)}")
+        return {"status": "error", "message": f"Invalid parameters: {str(e)}"}
+    except Exception as e:
+        logger.error(f"cancel_print: unexpected error: {str(e)}", exc_info=True)
+        return {"status": "error", "message": f"Error canceling print: {str(e)}"}
+
+
+async def adjust_temperature(
+    project_name: str, component: str, target_temp: float, host: str = "", port: str = "",
+    api_key: str = ""
+) -> dict:
+    """Adjust printer temperature (nozzle or bed).
+
+    Args:
+        project_name: Name of the project being monitored
+        component: "nozzle" or "bed"
+        target_temp: Target temperature in Celsius (0-350)
+        host: OctoPrint server hostname (empty to use config default)
+        port: OctoPrint server port (empty to use config default)
+        api_key: OctoPrint API key (empty to use config default)
+
+    Returns:
+        dict with status, component, and target_temp
+    """
+    if not project_name:
+        logger.warning("adjust_temperature: empty project_name")
+        return {"status": "error", "message": "project_name is required"}
+
+    if component not in ("nozzle", "bed"):
+        logger.warning(f"adjust_temperature: invalid component: {component}")
+        return {"status": "error", "message": "component must be 'nozzle' or 'bed'"}
+
+    try:
+        target_temp_float = float(target_temp)
+    except (TypeError, ValueError):
+        logger.warning(f"adjust_temperature: invalid temperature: {target_temp}")
+        return {"status": "error", "message": "target_temp must be a number"}
+
+    if target_temp_float < 0 or target_temp_float > 350:
+        logger.warning(f"adjust_temperature: temperature out of range: {target_temp_float}")
+        return {
+            "status": "error",
+            "message": "target_temp must be between 0 and 350 Celsius"
+        }
+
+    try:
+        final_host, final_port, final_api_key = _get_connection_params(host, port, api_key)
+        client = OctoPrintClient(final_host, final_port, final_api_key)
+        octorest_client = client._get_client()
+
+        if component == "nozzle":
+            octorest_client.tool_target({"tool0": target_temp_float})
+        else:  # bed
+            octorest_client.bed_target(target_temp_float)
+
+        # Log intervention
+        monitor_dir = _get_monitor_dir(project_name)
+        interventions_file = monitor_dir / "interventions.json"
+        interventions = _load_interventions(interventions_file)
+        interventions.append({
+            "action": "adjust_temperature",
+            "component": component,
+            "target_temp": target_temp_float,
+            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "status": "ok"
+        })
+        with open(interventions_file, "w") as f:
+            json.dump(interventions, f, indent=2)
+
+        logger.info(f"adjust_temperature: {component} set to {target_temp_float}°C for {project_name}")
+        return {
+            "status": "ok",
+            "message": f"Temperature for {component} set to {target_temp_float}°C",
+            "component": component,
+            "target_temp": target_temp_float
+        }
+    except ValueError as e:
+        logger.warning(f"adjust_temperature: invalid parameters: {str(e)}")
+        return {"status": "error", "message": f"Invalid parameters: {str(e)}"}
+    except Exception as e:
+        logger.error(f"adjust_temperature: unexpected error: {str(e)}", exc_info=True)
+        return {"status": "error", "message": f"Error adjusting temperature: {str(e)}"}

@@ -850,6 +850,195 @@ Get active print job information and progress.
 
 ---
 
+#### `format_alert(project_name: str, issues: list) -> dict`
+Format detected print issues into user-readable alerts and persist them.
+
+**Parameters:**
+- `project_name` (str): Name of the project being monitored
+- `issues` (list): List of detected issues (same format as `detect_print_issues` returns)
+
+Each issue should have:
+- `type` (str): Issue type (e.g., "temperature_deviation", "filament_jam", "layer_shift")
+- `severity` (str): "warning" or "error"
+- `message` (str): Description of the detected issue
+- `detected_at` (int): Index where issue was detected
+- `data` (dict): Additional issue data
+
+**Returns:** dict with keys:
+- `status` (str): "ok" or "error"
+- `alerts` (list): Formatted alerts with recommendations
+- `alert_count` (int): Number of alerts created
+- `message` (str): Human-readable status message
+
+**Example Call:**
+```python
+issues = [
+    {
+        "type": "temperature_deviation",
+        "severity": "warning",
+        "message": "Nozzle 15°C deviation detected",
+        "detected_at": 5,
+        "data": {"nozzle_temp": {...}, "duration_seconds": 45}
+    }
+]
+result = await format_alert("my_project", issues)
+```
+
+**Example Response:**
+```json
+{
+  "status": "ok",
+  "alerts": [
+    {
+      "alert_id": "temperature_deviation_1707912345000",
+      "severity": "warning",
+      "message": "Nozzle 15°C deviation detected",
+      "recommended_action": "Check and adjust nozzle/bed temperature",
+      "timestamp": "2024-02-15T12:45:45Z",
+      "issue_type": "temperature_deviation"
+    }
+  ],
+  "alert_count": 1,
+  "message": "Formatted 1 alert(s)"
+}
+```
+
+**Recommended Action Mapping:**
+- `temperature_deviation` → "Check and adjust nozzle/bed temperature"
+- `filament_jam` → "Pause print and inspect filament path"
+- `layer_shift` → "Pause print and inspect print bed adhesion"
+- `bed_adhesion_risk` → "Monitor closely; consider pausing to re-level bed"
+- `early_print_failure` → "Review first layers; consider canceling and restarting"
+- (default) → "Inspect printer and review print status"
+
+**Persistence:** Alerts are appended to `{PROJECTS_DIR}/{project_name}/monitoring/alerts.json`
+
+---
+
+#### `pause_print(project_name: str, host: str = "", port: str = "", api_key: str = "") -> dict`
+Pause the current print job.
+
+**Parameters:**
+- `project_name` (str): Name of the project being monitored
+- `host` (str): OctoPrint server hostname/IP (empty to use config default)
+- `port` (str): OctoPrint port as string (empty to use config default)
+- `api_key` (str): OctoPrint API key (empty to use config default)
+
+**Returns:** dict with keys:
+- `status` (str): "ok" or "error"
+- `message` (str): Human-readable status message
+- `action` (str): "pause" (on success)
+
+**Example Response - Success:**
+```json
+{
+  "status": "ok",
+  "message": "Print paused successfully",
+  "action": "pause"
+}
+```
+
+**Logging:** Intervention is logged to `{PROJECTS_DIR}/{project_name}/monitoring/interventions.json`
+
+---
+
+#### `resume_print(project_name: str, host: str = "", port: str = "", api_key: str = "") -> dict`
+Resume a paused print job.
+
+**Parameters:**
+- `project_name` (str): Name of the project being monitored
+- `host` (str): OctoPrint server hostname/IP (empty to use config default)
+- `port` (str): OctoPrint port as string (empty to use config default)
+- `api_key` (str): OctoPrint API key (empty to use config default)
+
+**Returns:** dict with keys:
+- `status` (str): "ok" or "error"
+- `message` (str): Human-readable status message
+- `action` (str): "resume" (on success)
+
+**Example Response - Success:**
+```json
+{
+  "status": "ok",
+  "message": "Print resumed successfully",
+  "action": "resume"
+}
+```
+
+**Logging:** Intervention is logged to `{PROJECTS_DIR}/{project_name}/monitoring/interventions.json`
+
+---
+
+#### `cancel_print(project_name: str, host: str = "", port: str = "", api_key: str = "") -> dict`
+Cancel the current print job.
+
+**Parameters:**
+- `project_name` (str): Name of the project being monitored
+- `host` (str): OctoPrint server hostname/IP (empty to use config default)
+- `port` (str): OctoPrint port as string (empty to use config default)
+- `api_key` (str): OctoPrint API key (empty to use config default)
+
+**Returns:** dict with keys:
+- `status` (str): "ok" or "error"
+- `message` (str): Human-readable status message
+- `action` (str): "cancel" (on success)
+
+**Example Response - Success:**
+```json
+{
+  "status": "ok",
+  "message": "Print canceled successfully",
+  "action": "cancel"
+}
+```
+
+**Logging:** Intervention is logged to `{PROJECTS_DIR}/{project_name}/monitoring/interventions.json`
+
+---
+
+#### `adjust_temperature(project_name: str, component: str, target_temp: float, host: str = "", port: str = "", api_key: str = "") -> dict`
+Adjust printer temperature (nozzle or bed).
+
+**Parameters:**
+- `project_name` (str): Name of the project being monitored
+- `component` (str): "nozzle" or "bed"
+- `target_temp` (float): Target temperature in Celsius (0-350)
+- `host` (str): OctoPrint server hostname/IP (empty to use config default)
+- `port` (str): OctoPrint port as string (empty to use config default)
+- `api_key` (str): OctoPrint API key (empty to use config default)
+
+**Returns:** dict with keys:
+- `status` (str): "ok" or "error"
+- `message` (str): Human-readable status message
+- `component` (str): Component adjusted ("nozzle" or "bed")
+- `target_temp` (float): Target temperature set
+
+**Validation:**
+- `component` must be "nozzle" or "bed" (returns error otherwise)
+- `target_temp` must be between 0 and 350°C (returns error otherwise)
+
+**Example Response - Nozzle Success:**
+```json
+{
+  "status": "ok",
+  "message": "Temperature for nozzle set to 210°C",
+  "component": "nozzle",
+  "target_temp": 210.0
+}
+```
+
+**Example Response - Invalid Component:**
+```json
+{
+  "status": "error",
+  "message": "component must be 'nozzle' or 'bed'"
+}
+```
+
+**Logging:** Intervention is logged to `{PROJECTS_DIR}/{project_name}/monitoring/interventions.json`
+
+---
+
 **OctoPrintClient Class:**
 Internal class used by tool functions. Provides low-level OctoPrint API access.
 
@@ -862,6 +1051,11 @@ client = OctoPrintClient(host: str, port: int, api_key: str)
 - `test_connection() -> dict` — Test server connectivity
 - `get_printer_status() -> dict` — Get printer state and temps
 - `get_job_status() -> dict` — Get active job information
+- `pause() -> None` — Pause current print
+- `resume() -> None` — Resume paused print
+- `cancel() -> None` — Cancel current print
+- `tool_target(targets: dict) -> None` — Set nozzle temperature
+- `bed_target(target: float) -> None` — Set bed temperature
 
 **Validation:** Constructor validates all parameters and raises `ValueError` if invalid
 
