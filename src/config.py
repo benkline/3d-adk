@@ -30,6 +30,9 @@ PROJECTS_DIR = os.getenv("PROJECTS_DIR", "./projects")
 # Sessions Directory
 SESSIONS_DIR = os.getenv("SESSIONS_DIR", "./sessions")
 
+# Material Cost Configuration
+FILAMENT_COST_PER_KG = float(os.getenv("FILAMENT_COST_PER_KG", "25.0"))  # USD
+
 # Validate required keys
 missing_keys = [key for key in REQUIRED_KEYS if not os.getenv(key)]
 if missing_keys:

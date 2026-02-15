@@ -1190,3 +1190,257 @@ async def analyze_printability(project_name: str, specs_path: Optional[str] = No
             "status": "error",
             "message": f"Failed to analyze printability: {str(e)}"
         }
+
+
+def _optimize_orientation(params: dict) -> tuple[str, str]:
+    """Determine optimal print orientation based on dimensions.
+
+    Strategy: Minimize print height to reduce print time and supports.
+    The smallest dimension should be the print height; the other two form the base.
+
+    Returns: (orientation, rationale)
+    - "flat": width×depth base, height as print height
+    - "upright": depth×height base, width as print height
+    - "side": width×height base, depth as print height
+    """
+    width = params["width"]
+    height = params["height"]
+    depth = params["depth"]
+
+    # Calculate print height for each orientation
+    orientations = {
+        "flat": (width * depth, height),        # (bed_area, print_height)
+        "upright": (depth * height, width),     # (bed_area, print_height)
+        "side": (width * height, depth)         # (bed_area, print_height)
+    }
+
+    # Choose orientation with the SMALLEST print height (minimize time)
+    # Tiebreaker: largest bed area for better support adhesion
+    best_orientation = min(orientations.items(),
+                          key=lambda x: (x[1][1], -x[1][0]))[0]
+
+    bed_area, print_height = orientations[best_orientation]
+    rationale = f"Orientation optimized: {best_orientation.upper()} ({print_height:.0f}mm height, {bed_area:.0f}mm² bed area)"
+
+    return best_orientation, rationale
+
+
+def _recommend_infill(params: dict) -> tuple[int, str]:
+    """Recommend infill percentage based on constraints and use case.
+
+    Returns: (infill_percentage, rationale)
+    """
+    constraints = params.get("constraints", [])
+    constraint_str = " ".join(constraints).lower() if constraints else ""
+
+    # Tiers based on functional requirements
+    if "structural" in constraint_str or "load" in constraint_str or "stress" in constraint_str:
+        infill = 50
+        rationale = "50% infill recommended for structural/load-bearing parts"
+    elif "functional" in constraint_str or "mechanical" in constraint_str:
+        infill = 35
+        rationale = "35% infill recommended for functional/mechanical parts"
+    elif "decorative" in constraint_str or "display" in constraint_str:
+        infill = 10
+        rationale = "10% infill recommended for decorative/display parts"
+    else:
+        # Standard default
+        infill = 20
+        rationale = "20% infill recommended for standard parts"
+
+    return infill, rationale
+
+
+def _determine_support_strategy(params: dict, printability_report: Optional[dict] = None) -> tuple[bool, str, str]:
+    """Determine support material requirements.
+
+    Returns: (supports_required, support_type, rationale)
+    """
+    # If printability report is provided, check for overhang warnings
+    if printability_report and "warnings" in printability_report:
+        warnings = printability_report.get("warnings", [])
+        if any("overhang" in w.lower() for w in warnings):
+            return True, "touching_buildplate", "Based on printability analysis: overhangs detected"
+
+    # Heuristic: parts that are tall and narrow likely need supports
+    width = params["width"]
+    height = params["height"]
+    depth = params["depth"]
+
+    # Aspect ratio check: if height > 2 * min(width, depth), might need supports
+    min_base = min(width, depth)
+    aspect_ratio = height / min_base if min_base > 0 else 1
+
+    if aspect_ratio > 2.5:
+        return True, "tree", "Tall narrow geometry: tree supports recommended for stability"
+    else:
+        return False, "none", "Part geometry suitable for support-free printing"
+
+
+def _estimate_weight(params: dict, infill_pct: float, orientation: str) -> float:
+    """Estimate print weight in grams.
+
+    Calculates volume with wall thickness, applies density and infill factor.
+    """
+    width = params["width"]
+    height = params["height"]
+    depth = params["depth"]
+    wall = params.get("wall_thickness", 2)
+    material = params.get("material", "PLA")
+
+    # Material densities (g/cm³)
+    densities = {
+        "PLA": 1.24,
+        "PETG": 1.27,
+        "ABS": 1.05,
+        "Resin": 1.2,
+        "Nylon": 1.14
+    }
+    density = densities.get(material, 1.24)
+
+    # Volume calculation: outer box minus hollow interior
+    outer_volume = (width * height * depth) / 1000  # Convert mm³ to cm³
+
+    # Inner hollow volume (walls always solid)
+    inner_dims = [width - 2*wall, height - 2*wall, depth - 2*wall]
+    if all(d > 0 for d in inner_dims):
+        inner_volume = (inner_dims[0] * inner_dims[1] * inner_dims[2]) / 1000
+    else:
+        inner_volume = 0
+
+    # Wall volume (always solid)
+    wall_volume = outer_volume - inner_volume
+
+    # Hollow interior with infill
+    hollow_volume = inner_volume
+
+    # Weight = wall_volume (solid) + hollow_volume * (infill_percentage / 100)
+    total_volume = wall_volume + (hollow_volume * infill_pct / 100)
+    weight_g = total_volume * density
+
+    return round(weight_g, 1)
+
+
+def _estimate_print_time(weight_g: float, params: dict, infill_pct: float) -> float:
+    """Estimate print time in hours.
+
+    Base formula: weight / 8 grams per hour (slower than design's simplistic /10).
+    Adjusted for infill and supports.
+    """
+    # Base print speed assumption: 8g per hour
+    base_hours = weight_g / 8.0
+
+    # Infill adjustment: higher infill = slightly more time (but not linear)
+    infill_factor = 0.7 + (infill_pct / 100 * 0.3)  # Range: 0.7 to 1.0
+
+    # Adjust for support overhead (if needed)
+    has_supports = params.get("supports_required", False)
+    support_factor = 1.2 if has_supports else 1.0
+
+    total_hours = base_hours * infill_factor * support_factor
+
+    return round(total_hours, 2)
+
+
+def _estimate_cost(weight_g: float) -> str:
+    """Estimate material cost in USD.
+
+    Uses FILAMENT_COST_PER_KG from config.
+    """
+    from src.config import FILAMENT_COST_PER_KG
+
+    cost = (weight_g / 1000) * FILAMENT_COST_PER_KG
+    return f"${cost:.2f}"
+
+
+async def optimize_parameters(
+    project_name: str,
+    specs_path: Optional[str] = None,
+    printability_report: Optional[dict] = None
+) -> dict:
+    """Optimize model parameters for printing (orientation, infill, supports, time, cost).
+
+    Args:
+        project_name: Name of the project (non-empty string)
+        specs_path: Optional path to design_specs.json (defaults to design/design_specs.json)
+        printability_report: Optional dict from printability analysis (TICKET-013)
+                            containing warnings and suggestions
+
+    Returns:
+        dict with keys:
+        - status: "ok" or "error"
+        - project_name: str (if ok)
+        - recommendations: dict with optimization results (if ok)
+        - message: str
+    """
+    logger.info(f"optimize_parameters called: project={project_name}")
+
+    # Validate inputs
+    if not isinstance(project_name, str) or not project_name.strip():
+        logger.warning("optimize_parameters: empty project_name")
+        return {
+            "status": "error",
+            "message": "project_name must be a non-empty string"
+        }
+
+    try:
+        # Load design specs
+        design_specs = _load_design_specs(project_name, specs_path)
+        params = _extract_scad_params(design_specs)
+
+        # Add constraints early (needed for infill recommendations)
+        params["constraints"] = design_specs.get("design_brief", {}).get("constraints", [])
+
+        # Get optimization recommendations
+        orientation, orientation_rationale = _optimize_orientation(params)
+        infill_pct, infill_rationale = _recommend_infill(params)
+        supports_needed, support_type, support_rationale = _determine_support_strategy(
+            params, printability_report
+        )
+
+        # Update params for weight/time calculations
+        params["supports_required"] = supports_needed
+
+        # Calculate estimates
+        weight_g = _estimate_weight(params, infill_pct, orientation)
+        print_time_hours = _estimate_print_time(weight_g, params, infill_pct)
+        material_cost = _estimate_cost(weight_g)
+
+        logger.info(f"optimize_parameters: optimization complete for {project_name}")
+
+        return {
+            "status": "ok",
+            "project_name": project_name,
+            "recommendations": {
+                "print_orientation": orientation,
+                "orientation_rationale": orientation_rationale,
+                "infill_percentage": infill_pct,
+                "infill_rationale": infill_rationale,
+                "supports_required": supports_needed,
+                "support_type": support_type,
+                "support_rationale": support_rationale,
+                "estimated_weight_g": weight_g,
+                "estimated_print_time_hours": print_time_hours,
+                "estimated_material_cost_usd": material_cost
+            },
+            "message": "Parameter optimization complete"
+        }
+
+    except FileNotFoundError as e:
+        logger.error(f"optimize_parameters: file not found: {str(e)}")
+        return {
+            "status": "error",
+            "message": f"Design specs file not found: {str(e)}"
+        }
+    except json.JSONDecodeError as e:
+        logger.error(f"optimize_parameters: invalid JSON: {str(e)}")
+        return {
+            "status": "error",
+            "message": f"Design specs file contains invalid JSON: {str(e)}"
+        }
+    except Exception as e:
+        logger.error(f"optimize_parameters: error for {project_name}: {str(e)}", exc_info=True)
+        return {
+            "status": "error",
+            "message": f"Failed to optimize parameters: {str(e)}"
+        }
