@@ -237,7 +237,7 @@ See: [../specs/DESIGN_AGENT_SPEC.md](../specs/DESIGN_AGENT_SPEC.md)
 
 **Workflow:** Validation → Setup → Generation → Preview → Export
 
-**Implementation:** `google.adk.agents.LlmAgent` with five `FunctionTool`-wrapped async functions
+**Implementation:** `google.adk.agents.LlmAgent` with seven `FunctionTool`-wrapped async functions
 
 **Agent Name:** `modeling_phase_agent`
 
@@ -565,6 +565,100 @@ On successful analysis, updates `{project}/modeling/metadata.json` with:
 
 ---
 
+#### `optimize_parameters(project_name: str, specs_path: Optional[str] = None, printability_report: Optional[dict] = None) -> dict`
+Generate print parameter recommendations for optimal printing outcomes.
+
+**Parameters:**
+- `project_name` (str): Name of the project (non-empty)
+- `specs_path` (str, optional): Path to design_specs.json (defaults to `{project}/design/design_specs.json`)
+- `printability_report` (dict, optional): Printability analysis report from `analyze_printability` (used to refine recommendations)
+
+**Returns:** dict with keys:
+- `status` (str): "ok" or "error"
+- `project_name` (str): Name of the project
+- `recommendations` (dict): Optimization recommendations (if status is "ok") with keys:
+  - `print_orientation` (str): Recommended orientation ("flat", "upright", or "side")
+  - `orientation_rationale` (str): Explanation of orientation choice
+  - `infill_percentage` (int): Recommended infill (10, 20, 35, or 50)
+  - `infill_rationale` (str): Explanation of infill choice
+  - `supports_required` (bool): Whether support structures are needed
+  - `support_type` (str): Type of support ("none", "touching_buildplate", or "tree")
+  - `support_rationale` (str): Explanation of support choice
+  - `estimated_weight_g` (float): Estimated part weight in grams
+  - `estimated_print_time_hours` (float): Estimated print time in hours
+  - `estimated_material_cost_usd` (str): Estimated material cost in "$X.XX" format
+- `message` (str): Success or error message
+
+**Optimization Strategy:**
+
+**Print Orientation:**
+- Analyzes overall dimensions from specifications
+- Selects orientation that minimizes print height (z-axis)
+- Trade-off: "flat" (fast but more supports) vs "upright" (slower but fewer supports)
+- Uses printability report overhang data if provided
+
+**Infill Percentage Recommendations:**
+- `10%`: Decorative parts, non-structural, minimal strength needed
+- `20%`: Standard parts, everyday use, baseline strength
+- `35%`: Functional/mechanical parts, moving components, moderate load-bearing
+- `50%`: Structural/load-bearing parts, high stress areas, maximum strength
+- Selection driven by `design_brief.constraints` keywords: "lightweight" → lower infill, "strong"/"load" → higher infill
+
+**Support Strategy:**
+- `"none"`: No supports needed (part prints without overhangs)
+- `"touching_buildplate"`: Linear supports touching only build plate (fewer supports, easier removal)
+- `"tree"`: Advanced tree supports (material-efficient, best surface quality)
+- Selection based on printability report overhang analysis and orientation
+
+**Material Cost Calculation:**
+- Uses material density and print volume to estimate weight
+- Multiplies weight by configured `FILAMENT_COST_PER_KG` from `src/config` (default: $25.00/kg)
+- Formula: `cost_usd = (estimated_weight_g / 1000) * FILAMENT_COST_PER_KG`
+
+**Print Time Estimation:**
+- Default: 8g/hour (conservative for most 0.4mm nozzle FDM printers)
+- Adjusts based on infill percentage (higher infill → longer time)
+- Formula: `hours = (estimated_weight_g / 8) * (1 + (infill_percentage / 100))`
+
+**Integration with Printability Report:**
+- If `printability_report` provided (from `analyze_printability`), uses report data to refine:
+  - Support requirements based on overhang detection
+  - Orientation to minimize support material usage
+  - Infill to address structural concerns flagged in report
+
+**Error Cases (return status "error"):**
+- Empty `project_name`
+- Design specs file not found
+- Invalid or corrupted JSON in design specs
+- Missing critical specification keys
+- Other I/O or JSON parsing errors
+
+**Metadata Update:**
+On successful optimization, updates `{project}/modeling/metadata.json` with:
+```json
+{
+  "id": "optimization_xxxxxxxx",
+  "created_at": "ISO timestamp",
+  "status": "optimized",
+  "recommendations": {
+    "print_orientation": "flat",
+    "orientation_rationale": "Minimizes print height for faster printing",
+    "infill_percentage": 20,
+    "infill_rationale": "Standard part with everyday use - 20% provides good balance",
+    "supports_required": false,
+    "support_type": "none",
+    "support_rationale": "Flat orientation eliminates overhangs",
+    "estimated_weight_g": 45.5,
+    "estimated_print_time_hours": 5.7,
+    "estimated_material_cost_usd": "$1.14"
+  }
+}
+```
+
+**Error Handling:** Returns error dict with message rather than raising exceptions
+
+---
+
 **Output Structure:**
 All modeling phase outputs stored in `{PROJECTS_DIR}/{project_name}/modeling/`:
 ```
@@ -605,6 +699,14 @@ result = await render_preview("my_project")
 result = await export_model("my_project", "stl")
 # → status "ok" with model.stl file at {project}/modeling/exports/
 # OR status "pending" if OpenSCAD not installed (model.scad is ready)
+
+# 6. Analyze printability
+result = await analyze_printability("my_project")
+# → status "ok" with printability report (feasibility, warnings, suggestions)
+
+# 7. Optimize print parameters
+result = await optimize_parameters("my_project", printability_report=result["report"])
+# → status "ok" with optimization recommendations (orientation, infill, supports, cost/time estimates)
 ```
 
 ### Monitor Agent
