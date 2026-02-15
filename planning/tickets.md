@@ -479,7 +479,7 @@ Test the complete modeling workflow end-to-end.
 ## PHASE 3: Print Monitor Agent Implementation
 
 ### TICKET-016: OctoPrint API Integration
-**Status:** TODO
+**Status:** DONE
 **Priority:** P1
 **Phase:** Monitor Agent
 **Depends on:** TICKET-002
@@ -488,26 +488,36 @@ Test the complete modeling workflow end-to-end.
 Implement OctoPrint API connection and communication.
 
 **Tasks:**
-- [ ] Create `src/agents/monitor_agent.py`
-- [ ] Implement OctoPrint API client wrapper
-- [ ] Build connection testing and validation
-- [ ] Implement authentication handling
-- [ ] Create error handling and retry logic
-- [ ] Update relevant documentation in `docs/API_REFERENCE.md`
+- [x] Create `src/agents/monitor.py` (monitor_phase_agent LlmAgent)
+- [x] Implement OctoPrint API client wrapper (OctoPrintClient class)
+- [x] Build connection testing and validation (test_connection tool)
+- [x] Implement authentication handling (API key validation)
+- [x] Create error handling and retry logic (two-tier validation)
+- [x] Update relevant documentation in `docs/API_REFERENCE.md`
 
 **Acceptance Criteria:**
-- Successfully connects to OctoPrint instance
-- API calls work correctly
-- Connection errors handled gracefully
-- Can query printer status
+- ✅ Successfully connects to OctoPrint instance
+- ✅ API calls work correctly
+- ✅ Connection errors handled gracefully
+- ✅ Can query printer status
+
+**Implementation Details:**
+- OctoPrintClient class wrapping octorest library
+- Three tools: test_connection, get_printer_status, get_job_status
+- monitor_phase_agent LlmAgent with comprehensive instructions
+- 28 comprehensive tests (100% passing)
+- conftest.py for test environment configuration
+- Full API documentation with examples
+- Config fallbacks from environment variables
 
 **Testing:**
-```bash
-# Test with OctoPrint instance (local or mock)
-python -c "from src.agents.monitor_agent import OctoPrintClient; \
-  client = OctoPrintClient('localhost', 'api_key'); \
-  print(client.get_printer_status())"
-```
+- 28 tests covering all functionality (100% passing)
+- Connection validation and error handling
+- Printer status with temperature readings
+- Job status for active and idle states
+- Config fallback behavior
+
+**Created PR:** https://github.com/benkline/3d-adk/pull/7
 
 ---
 
