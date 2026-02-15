@@ -168,19 +168,52 @@ result2 = await generate_images("my-project", "sketch_abc", "front",
 
 ---
 
-#### `generate_blueprint(project_name: str, design_brief: dict, approved_images: list) -> dict`
+#### `generate_blueprint(project_name: str, design_brief: dict, approved_images: list = None) -> dict`
 Generate formal technical blueprint and specifications document.
 
 **Parameters:**
 - `project_name` (str): Name of the project (non-empty)
 - `design_brief` (dict): Design brief with object details (non-empty dict)
-- `approved_images` (list): List of approved image IDs
+- `approved_images` (list, optional): List of approved image IDs (defaults to None)
 
 **Returns:** dict with keys:
 - `status` (str): "ok" or "error"
-- `blueprint_path` (str): Path to blueprint markdown file
-- `specs_path` (str): Path to specs JSON file
-- `message` (str): Error message (if status is "error")
+- `blueprint_path` (str): Absolute path to blueprint markdown file
+- `specs_path` (str): Absolute path to design_specs JSON file
+- `message` (str): Error message (if status is "error") or success message
+
+**Blueprint Markdown Structure:**
+The generated `blueprint.md` contains:
+- **Design Summary:** Project name, purpose, aesthetics, constraints, special requirements
+- **Specifications:** Dimensions, material, wall thickness, infill percentage
+- **Print Parameters:** Orientation, supports, estimated print time, estimated weight
+- **Assembly:** (if multi-part design)
+- **Notes:** Design validation tips and adjustment guidelines
+
+**Specs JSON Structure:**
+The generated `design_specs.json` is input for the modeling agent:
+```json
+{
+  "project_id": "uuid",
+  "project_name": "string",
+  "created_at": "timestamp",
+  "design_brief": {},
+  "specifications": {
+    "overall_dimensions": {"width": "number", "height": "number", "depth": "number"},
+    "material": "string",
+    "wall_thickness_mm": number,
+    "infill_percentage": number,
+    "print_orientation": "string",
+    "supports_required": boolean,
+    "support_type": "string",
+    "estimated_weight_g": number,
+    "estimated_print_time_hours": number
+  },
+  "approved_images": [],
+  "parts": [{"name": "string", "quantity": number, "dimensions": {}, "tolerance_mm": number}],
+  "assembly_instructions": []
+}
+```
 
 **Error Handling:** Returns error dict with message rather than raising exceptions
 
@@ -190,10 +223,11 @@ Generate formal technical blueprint and specifications document.
 All design phase outputs stored in `{PROJECTS_DIR}/{project_name}/design/`:
 ```
 design/
-├── sketches/        # Conceptual sketches
-├── images/          # Rendered images
-├── blueprint.md     # Technical blueprint
-└── specs.json       # Specifications document
+├── sketches/            # Conceptual sketches
+├── images/              # Rendered images
+├── interview.json       # Interview responses and design brief
+├── blueprint.md         # Technical blueprint (markdown)
+└── design_specs.json    # Specifications document (JSON for modeling agent)
 ```
 
 See: [../specs/DESIGN_AGENT_SPEC.md](../specs/DESIGN_AGENT_SPEC.md)
