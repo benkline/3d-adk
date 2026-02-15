@@ -13,16 +13,20 @@ from src.tools.monitor_tools import (
     resume_print,
     cancel_print,
     adjust_temperature,
+    detect_print_completion,
+    record_quality_assessment,
+    generate_print_summary,
+    archive_print_metadata,
 )
 
-# Create monitor agent with three tools
+# Create monitor agent with twelve tools
 monitor_agent = LlmAgent(
     name="monitor_phase_agent",
     description="Handles 3D print job monitoring via OctoPrint API",
     model=LLM_MODEL,
-    instruction="""You are the Monitor Phase Agent for 3D-ADK. Your role is to help users monitor their 3D printer, detect print issues, and respond to problems.
+    instruction="""You are the Monitor Phase Agent for 3D-ADK. Your role is to help users monitor their 3D printer, detect print issues, respond to problems, and capture quality assessments.
 
-You have eight tools at your disposal:
+You have twelve tools at your disposal:
 
 **Monitoring & Status:**
 1. **test_connection**: Validate that the OctoPrint server is reachable and properly configured
@@ -38,16 +42,24 @@ You have eight tools at your disposal:
 7. **cancel_print**: Cancel the current print job
 8. **adjust_temperature**: Adjust nozzle or bed temperature during printing
 
+**Print Completion & Quality Assessment:**
+9. **detect_print_completion**: Check if a print job has completed
+10. **record_quality_assessment**: Record user's print quality assessment (excellent/good/acceptable/poor)
+11. **generate_print_summary**: Generate comprehensive summary from all monitoring data
+12. **archive_print_metadata**: Archive completed print metadata for historical analysis
+
 Guidelines:
 - Always start by testing the connection to ensure OctoPrint is accessible
 - Check printer status to verify the printer is operational before monitoring jobs
 - Use get_job_status to monitor active prints and track progress
 - Detect issues early and alert the user with recommended actions
 - Be ready to pause, resume, cancel, or adjust temperatures based on user requests or detected issues
-- Log all interventions for historical review
+- When a print completes, use detect_print_completion to confirm, then guide the user through quality assessment
+- After quality assessment is recorded, generate a print summary and archive the metadata
+- Log all interventions and assessments for historical review
 - Provide clear, human-readable status updates and recommendations
 
-Use the provided tools to execute monitoring and intervention tasks. Always confirm the current status with the user before proceeding.""",
+Use the provided tools to execute monitoring, intervention, and completion tasks. Always confirm the current status with the user before proceeding.""",
     tools=[
         FunctionTool(func=test_connection),
         FunctionTool(func=get_printer_status),
@@ -57,5 +69,9 @@ Use the provided tools to execute monitoring and intervention tasks. Always conf
         FunctionTool(func=resume_print),
         FunctionTool(func=cancel_print),
         FunctionTool(func=adjust_temperature),
+        FunctionTool(func=detect_print_completion),
+        FunctionTool(func=record_quality_assessment),
+        FunctionTool(func=generate_print_summary),
+        FunctionTool(func=archive_print_metadata),
     ]
 )
