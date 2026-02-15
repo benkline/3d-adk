@@ -233,11 +233,193 @@ design/
 See: [../specs/DESIGN_AGENT_SPEC.md](../specs/DESIGN_AGENT_SPEC.md)
 
 ### Modeling Agent
-**Purpose:** Convert designs to STL files
+**Purpose:** Convert design specifications to OpenSCAD models and exports for 3D printing
 
-**Workflow:** Specs → OpenSCAD → Validation → Export
+**Workflow:** Validation → Setup → Generation → Export
 
-See: [../specs/MODELING_AGENT_SPEC.md](../specs/MODELING_AGENT_SPEC.md)
+**Implementation:** `google.adk.agents.LlmAgent` with four `FunctionTool`-wrapped async functions
+
+**Agent Name:** `modeling_phase_agent`
+
+**Model:** Uses configured `LLM_MODEL` from `src.config`
+
+**Tools:**
+
+#### `validate_design_specs(project_name: str, specs_path: Optional[str] = None) -> dict`
+Validate design specifications from the design phase output.
+
+**Parameters:**
+- `project_name` (str): Name of the project (non-empty)
+- `specs_path` (str, optional): Path to design_specs.json (defaults to `{project}/design/design_specs.json`)
+
+**Returns:** dict with keys:
+- `status` (str): "ok" or "error"
+- `specs` (dict or None): Validated design specifications (if status is "ok")
+- `message` (str): Success or error message
+
+**Validation Rules:**
+- Checks required keys: `project_name`, `specifications`, `design_brief`
+- Validates `specifications` contains: `overall_dimensions`, `material`
+- Returns error dict if any validation fails
+
+**Error Handling:** Returns error dict with message rather than raising exceptions
+
+---
+
+#### `setup_openscad_workspace(project_name: str) -> dict`
+Set up OpenSCAD workspace directory structure for a project.
+
+**Parameters:**
+- `project_name` (str): Name of the project (non-empty)
+
+**Returns:** dict with keys:
+- `status` (str): "ok" or "error"
+- `workspace_dir` (str): Path to the modeling directory
+- `message` (str): Success or error message
+
+**Directory Structure Created:**
+```
+modeling/
+├── scad/           # OpenSCAD source files (.scad)
+├── exports/        # Exported 3D files (STL, 3MF)
+├── previews/       # Preview images from OpenSCAD
+└── metadata.json   # Workspace metadata and history
+```
+
+**Metadata Structure:**
+```json
+{
+  "project_name": "string",
+  "created_at": "ISO timestamp",
+  "scad_models": [],
+  "exports": []
+}
+```
+
+**Error Handling:** Returns error dict with message rather than raising exceptions
+
+---
+
+#### `generate_scad_code(project_name: str, design_specs: dict) -> dict`
+Generate OpenSCAD code from design specifications.
+
+**Parameters:**
+- `project_name` (str): Name of the project (non-empty)
+- `design_specs` (dict): Design specifications from design phase (non-empty dict)
+
+**Returns:** dict with keys:
+- `status` (str): "ok" or "error"
+- `scad_path` (str): Path to generated .scad file
+- `scad_content` (str): The OpenSCAD code as string
+- `message` (str): Success or error message
+
+**Implementation Details:**
+- Uses `solidpython2` library to generate parametric OpenSCAD models
+- Extracts dimensions and material from `design_specs["specifications"]`
+- Generates parametric box module with configurable dimensions and wall thickness
+- Falls back to manual SCAD generation if `solidpython2` unavailable
+- Writes `.scad` file to `{project}/modeling/scad/model.scad`
+- Updates workspace metadata with model record
+
+**Generated SCAD Structure:**
+- Header comments with project name, material, dimensions, wall thickness
+- Parametric `module box(width, height, depth, wall)` definition
+- Module instantiation with calculated parameters
+- Clean, readable code suitable for further manual editing
+
+**Output File Location:** `{PROJECTS_DIR}/{project_name}/modeling/scad/model.scad`
+
+**Error Handling:** Returns error dict with message rather than raising exceptions
+
+---
+
+#### `export_model(project_name: str, export_format: str = "stl") -> dict`
+Export OpenSCAD model to printable format (STL or 3MF).
+
+**Parameters:**
+- `project_name` (str): Name of the project (non-empty)
+- `export_format` (str): Export format ("stl" or "3mf"), defaults to "stl"
+
+**Returns:** dict with keys:
+- `status` (str): "ok", "pending", or "error"
+- `export_path` (str): Path to exported file (if generated)
+- `export_format` (str): Format of the export
+- `message` (str): Status or error message
+
+**Export Behavior:**
+- Validates `export_format` against allowed set: `{"stl", "3mf"}`
+- Checks that OpenSCAD model exists at `{project}/modeling/scad/model.scad`
+- **If OpenSCAD binary found:** Invokes OpenSCAD CLI to render `.scad` → `.stl`/`.3mf` file
+  - Creates `{project}/modeling/exports/model.{format}` file
+  - Returns status "ok" with export path
+  - Timeout: 300 seconds per render
+- **If OpenSCAD binary not found:** Returns status "pending" (graceful degradation)
+  - Model `.scad` file is ready for manual rendering
+  - User can install OpenSCAD and render manually
+  - No error thrown — supports environments without OpenSCAD installed
+
+**OpenSCAD Binary Detection:**
+- Looks for binary at `OPENSCAD_PATH` from environment (see `src/config.py`)
+- Default: `/usr/local/bin/openscad`
+- Configurable via `OPENSCAD_PATH` env var
+
+**Error Cases (return status "error"):**
+- Invalid `export_format`
+- Model `.scad` file not found
+- OpenSCAD process failed (non-zero exit code)
+- Subprocess timeout (>300 seconds)
+- Other I/O or OS errors
+
+**Metadata Update:**
+On successful export, updates `{project}/modeling/metadata.json` with export record:
+```json
+{
+  "id": "uuid",
+  "filename": "model.stl",
+  "format": "stl",
+  "path": "/absolute/path/to/model.stl",
+  "created_at": "ISO timestamp",
+  "status": "exported"
+}
+```
+
+**Error Handling:** Returns error/pending dict with message rather than raising exceptions
+
+---
+
+**Output Structure:**
+All modeling phase outputs stored in `{PROJECTS_DIR}/{project_name}/modeling/`:
+```
+modeling/
+├── scad/           # OpenSCAD source files
+│   └── model.scad  # Generated parametric model
+├── exports/        # Exported 3D files ready for printing
+│   └── model.stl   # (or model.3mf)
+├── previews/       # (for future preview images)
+└── metadata.json   # Workspace and export history
+```
+
+---
+
+**Workflow Example:**
+```python
+# 1. Validate design specs from design phase
+result = await validate_design_specs("my_project")
+# → status "ok" with validated specs
+
+# 2. Set up modeling workspace
+result = await setup_openscad_workspace("my_project")
+# → status "ok", workspace directories created
+
+# 3. Generate OpenSCAD code
+result = await generate_scad_code("my_project", design_specs)
+# → status "ok" with model.scad file at {project}/modeling/scad/
+
+# 4. Export to STL for printing
+result = await export_model("my_project", "stl")
+# → status "ok" with model.stl file at {project}/modeling/exports/
+# OR status "pending" if OpenSCAD not installed (model.scad is ready)
+```
 
 ### Monitor Agent
 **Purpose:** Monitor 3D print execution
