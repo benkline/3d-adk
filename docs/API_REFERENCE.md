@@ -235,9 +235,9 @@ See: [../specs/DESIGN_AGENT_SPEC.md](../specs/DESIGN_AGENT_SPEC.md)
 ### Modeling Agent
 **Purpose:** Convert design specifications to OpenSCAD models and exports for 3D printing
 
-**Workflow:** Validation → Setup → Generation → Export
+**Workflow:** Validation → Setup → Generation → Preview → Export
 
-**Implementation:** `google.adk.agents.LlmAgent` with four `FunctionTool`-wrapped async functions
+**Implementation:** `google.adk.agents.LlmAgent` with five `FunctionTool`-wrapped async functions
 
 **Agent Name:** `modeling_phase_agent`
 
@@ -333,6 +333,73 @@ Generate OpenSCAD code from design specifications.
 
 ---
 
+#### `render_preview(project_name: str, perspectives: Optional[list] = None, resolution: int = 512) -> dict`
+Generate preview images of OpenSCAD models from multiple viewing angles.
+
+**Parameters:**
+- `project_name` (str): Name of the project (non-empty)
+- `perspectives` (list, optional): List of view angles to render. Valid options: "front", "back", "left", "right", "top", "bottom", "isometric". Defaults to `["front", "isometric", "top"]`
+- `resolution` (int, optional): Output resolution in pixels (256-1024). Defaults to 512
+
+**Returns:** dict with keys:
+- `status` (str): "ok", "pending", or "error"
+- `preview_paths` (list[str]): Paths to generated preview images (if status is "ok")
+- `perspectives` (list[str]): Successfully rendered perspective views (if status is "ok")
+- `resolution` (int): Resolution of generated previews (if status is "ok")
+- `message` (str): Status or error message
+
+**Rendering Behavior:**
+- Validates OpenSCAD model exists at `{project}/modeling/scad/model.scad`
+- **If OpenSCAD binary found:** Invokes OpenSCAD CLI to render each perspective
+  - Creates `{project}/modeling/previews/preview_{perspective}.png` files
+  - Uses camera parameters specific to each viewing angle
+  - Returns status "ok" with list of preview paths
+  - Timeout: 120 seconds per perspective
+  - Gracefully handles per-perspective failures (continues rendering other perspectives)
+- **If OpenSCAD binary not found:** Returns status "pending" (graceful degradation)
+  - Preview images cannot be generated without OpenSCAD
+  - User can install OpenSCAD and retry
+  - No error thrown — supports environments without OpenSCAD installed
+
+**Supported Perspectives:**
+- `"front"`: Front-facing view (0° rotation)
+- `"back"`: Rear-facing view (180° rotation)
+- `"left"`: Left side view (270° rotation)
+- `"right"`: Right side view (90° rotation)
+- `"top"`: Top-down view (90° pitch)
+- `"bottom"`: Bottom-up view (-90° pitch)
+- `"isometric"`: Standard isometric 3D view (55°, 25°, 140 distance)
+
+**OpenSCAD Binary Detection:**
+- Looks for binary at `OPENSCAD_PATH` from environment (see `src/config.py`)
+- Default: `/usr/local/bin/openscad`
+- Configurable via `OPENSCAD_PATH` env var
+
+**Error Cases (return status "error"):**
+- Empty `project_name`
+- Invalid `resolution` (outside 256-1024 range)
+- Invalid perspective names
+- Model `.scad` file not found
+- All perspective renders failed
+- Other I/O or OS errors
+
+**Metadata Update:**
+On successful generation, updates `{project}/modeling/metadata.json` with preview record:
+```json
+{
+  "id": "preview_xxxxxxxx",
+  "perspectives": ["front", "isometric", "top"],
+  "resolution": 512,
+  "paths": ["/path/to/preview_front.png", …],
+  "created_at": "ISO timestamp",
+  "status": "generated"
+}
+```
+
+**Error Handling:** Returns error/pending dict with message rather than raising exceptions
+
+---
+
 #### `export_model(project_name: str, export_format: str = "stl") -> dict`
 Export OpenSCAD model to printable format (STL or 3MF).
 
@@ -395,8 +462,11 @@ modeling/
 │   └── model.scad  # Generated parametric model
 ├── exports/        # Exported 3D files ready for printing
 │   └── model.stl   # (or model.3mf)
-├── previews/       # (for future preview images)
-└── metadata.json   # Workspace and export history
+├── previews/       # Preview images from different viewing angles
+│   ├── preview_front.png
+│   ├── preview_isometric.png
+│   └── preview_top.png
+└── metadata.json   # Workspace, export, and preview history
 ```
 
 ---
@@ -415,7 +485,12 @@ result = await setup_openscad_workspace("my_project")
 result = await generate_scad_code("my_project", design_specs)
 # → status "ok" with model.scad file at {project}/modeling/scad/
 
-# 4. Export to STL for printing
+# 4. Generate preview images from multiple angles
+result = await render_preview("my_project")
+# → status "ok" with preview images at {project}/modeling/previews/
+# OR status "pending" if OpenSCAD not installed
+
+# 5. Export to STL for printing
 result = await export_model("my_project", "stl")
 # → status "ok" with model.stl file at {project}/modeling/exports/
 # OR status "pending" if OpenSCAD not installed (model.scad is ready)
