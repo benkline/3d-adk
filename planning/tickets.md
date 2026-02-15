@@ -287,7 +287,7 @@ Test the complete design agent workflow end-to-end.
 ## PHASE 2: Modeling Agent Implementation
 
 ### TICKET-009: Modeling Agent Core Framework
-**Status:** DONE
+**Status:** TODO
 **Priority:** P1
 **Phase:** Modeling Agent
 **Depends on:** TICKET-002
@@ -296,29 +296,17 @@ Test the complete design agent workflow end-to-end.
 Create the basic structure for the Modeling Phase Agent.
 
 **Tasks:**
-- [x] Create `src/agents/modeling.py` with LlmAgent definition
-- [x] Implement agent initialization with four tools
-- [x] Create input validation from design specs (validate_design_specs)
-- [x] Implement output formatting for exports (export_model with STL/3MF support)
-- [x] Setup OpenSCAD integration (generate_scad_code using solidpython2)
-- [x] Update relevant documentation in `docs/API_REFERENCE.md`
-- [x] Create comprehensive test suite (15 tests, all passing)
+- [ ] Create `src/agents/modeling_agent.py`
+- [ ] Implement agent initialization
+- [ ] Create input validation from design specs
+- [ ] Implement output formatting for exports
+- [ ] Setup OpenSCAD integration
+- [ ] Update relevant documentation in `docs/API_REFERENCE.md`
 
 **Acceptance Criteria:**
-- ✅ Agent initializes and validates design input
-- ✅ OpenSCAD integration working (solidpython2 + subprocess)
-- ✅ Proper response formatting (status dict pattern)
-- ✅ All 15 new tests passing
-- ✅ No regressions (all 14 existing tests still passing)
-
-**Implementation:**
-- Created `src/agents/modeling.py` with modeling_agent (LlmAgent with 4 tools)
-- Implemented `src/tools/modeling_tools.py` with 4 async functions + 9 helpers
-- Added `OPENSCAD_PATH` to `src/config.py`
-- Created `tests/test_modeling.py` with 15 comprehensive tests
-- Updated `docs/API_REFERENCE.md` with full Modeling Agent documentation
-
-**PR:** https://github.com/benkline/3d-adk/pull/6
+- Agent initializes and validates design input
+- OpenSCAD integration working
+- Proper response formatting
 
 ---
 
@@ -361,7 +349,7 @@ simple_box();
 ---
 
 ### TICKET-011: Model Rendering & Preview
-**Status:** TODO
+**Status:** DONE
 **Priority:** P2
 **Phase:** Modeling Agent
 **Depends on:** TICKET-010
@@ -370,18 +358,29 @@ simple_box();
 Generate preview images of OpenSCAD models.
 
 **Tasks:**
-- [ ] Integrate OpenSCAD CLI for rendering
-- [ ] Generate multiple perspective views
-- [ ] Create preview image storage
-- [ ] Implement quality/resolution settings
-- [ ] Add error handling for render failures
-- [ ] Update relevant documentation in `docs/API_REFERENCE.md`
+- [x] Integrate OpenSCAD CLI for rendering
+- [x] Generate multiple perspective views
+- [x] Create preview image storage
+- [x] Implement quality/resolution settings
+- [x] Add error handling for render failures
+- [x] Update relevant documentation in `docs/API_REFERENCE.md`
 
 **Acceptance Criteria:**
-- Generates preview images successfully
-- Multiple viewing angles available
-- Images are clear and properly scaled
-- Handles render errors gracefully
+- ✅ Generates preview images successfully
+- ✅ Multiple viewing angles available (7 perspectives supported)
+- ✅ Images are clear and properly scaled (configurable resolution 256-1024)
+- ✅ Handles render errors gracefully (per-perspective error handling)
+
+**Implementation Details:**
+- Added `render_preview()` async tool with support for 7 viewing angles
+- Configurable resolution parameter (256-1024 pixels, default 512)
+- Default perspectives: front, isometric, top
+- Graceful degradation when OpenSCAD binary missing (returns pending status)
+- 6 comprehensive tests all passing
+- Updated modeling_agent to include render_preview as 5th tool
+- Full API documentation with examples
+
+**Created PR:** https://github.com/benkline/3d-adk/pull/9
 
 ---
 
@@ -499,7 +498,7 @@ Test the complete modeling workflow end-to-end.
 ## PHASE 3: Print Monitor Agent Implementation
 
 ### TICKET-016: OctoPrint API Integration
-**Status:** TODO
+**Status:** DONE
 **Priority:** P1
 **Phase:** Monitor Agent
 **Depends on:** TICKET-002
@@ -508,31 +507,31 @@ Test the complete modeling workflow end-to-end.
 Implement OctoPrint API connection and communication.
 
 **Tasks:**
-- [ ] Create `src/agents/monitor_agent.py`
-- [ ] Implement OctoPrint API client wrapper
-- [ ] Build connection testing and validation
-- [ ] Implement authentication handling
-- [ ] Create error handling and retry logic
-- [ ] Update relevant documentation in `docs/API_REFERENCE.md`
+- [x] Create `src/agents/monitor.py` (combined with TICKET-017)
+- [x] Implement OctoPrint API client wrapper (lazy session singleton)
+- [x] Build connection testing and validation (`connect_to_printer` tool)
+- [x] Implement authentication handling (API key validation, 401 handling)
+- [x] Create error handling and retry logic (comprehensive exception handling)
+- [x] Update relevant documentation in `docs/API_REFERENCE.md`
 
 **Acceptance Criteria:**
-- Successfully connects to OctoPrint instance
-- API calls work correctly
-- Connection errors handled gracefully
-- Can query printer status
+- ✅ Successfully connects to OctoPrint instance
+- ✅ API calls work correctly (`get_printer_status` tool)
+- ✅ Connection errors handled gracefully (returns "pending" status)
+- ✅ Can query printer status
 
-**Testing:**
-```bash
-# Test with OctoPrint instance (local or mock)
-python -c "from src.agents.monitor_agent import OctoPrintClient; \
-  client = OctoPrintClient('localhost', 'api_key'); \
-  print(client.get_printer_status())"
-```
+**Implementation Details:**
+- Lazy HTTP session singleton with header-based authentication
+- Comprehensive error handling with 3-level status codes (ok/error/pending)
+- Full input validation on all tool entry points
+- 5 tests for connection validation including auth failure, unreachable scenarios
+
+**PR:** https://github.com/benkline/3d-adk/pull/10
 
 ---
 
 ### TICKET-017: Real-time Print Monitoring
-**Status:** TODO
+**Status:** DONE
 **Priority:** P1
 **Phase:** Monitor Agent
 **Depends on:** TICKET-016
@@ -541,32 +540,31 @@ python -c "from src.agents.monitor_agent import OctoPrintClient; \
 Implement real-time monitoring of active print jobs.
 
 **Tasks:**
-- [ ] Create polling system for print status
-- [ ] Implement metric collection (progress, temps, filament)
-- [ ] Build status update formatting
-- [ ] Create periodic status summaries
-- [ ] Implement metric logging and storage
-- [ ] Update relevant documentation in `docs/API_REFERENCE.md`
+- [x] Create polling system for print status (`get_print_status` tool)
+- [x] Implement metric collection (progress, temps, filament) (`collect_metrics` tool)
+- [x] Build status update formatting (`_format_snapshot` helper)
+- [x] Create periodic status summaries (`get_print_summary` tool)
+- [x] Implement metric logging and storage (JSONL format with `_save_metric`/`_load_metrics`)
+- [x] Update relevant documentation in `docs/API_REFERENCE.md`
 
 **Acceptance Criteria:**
-- Metrics collected accurately
-- Updates generated in real-time
-- Logging works correctly
-- Status data properly stored
+- ✅ Metrics collected accurately (with snapshot count tracking)
+- ✅ Updates generated in real-time (ISO-8601 timestamps)
+- ✅ Logging works correctly (comprehensive logger usage)
+- ✅ Status data properly stored (JSONL format)
 
-**Status Update Format:**
-```json
-{
-  "timestamp": "2026-02-14T10:30:45Z",
-  "state": "printing",
-  "progress": 45.2,
-  "current_layer": 120,
-  "print_time_elapsed": 3600,
-  "print_time_remaining": 4400,
-  "bed_temp": {"current": 60, "target": 60},
-  "nozzle_temp": {"current": 205, "target": 210}
-}
-```
+**Implementation Details:**
+- 3 tools for monitoring: `get_print_status`, `collect_metrics`, `get_print_summary`
+- Metrics persisted to JSONL format for easy streaming/rotation
+- Poll count validation (1-60 snapshots per call)
+- Aggregated statistics: averages, min/max temperatures, time estimates
+- 20 comprehensive tests covering all scenarios
+
+**Test Results:**
+- 25 total monitor tests (all passing)
+- 68 total tests in suite (25 new + 43 existing, no regressions)
+
+**PR:** https://github.com/benkline/3d-adk/pull/10
 
 ---
 
