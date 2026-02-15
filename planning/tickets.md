@@ -732,7 +732,7 @@ Handle print completion and capture quality assessment.
 ---
 
 ### TICKET-021: Print History & Analytics
-**Status:** TODO
+**Status:** DONE
 **Priority:** P3
 **Phase:** Monitor Agent
 **Depends on:** TICKET-020
@@ -741,24 +741,35 @@ Handle print completion and capture quality assessment.
 Implement print history storage and analytics system.
 
 **Tasks:**
-- [ ] Create print history database/storage
-- [ ] Implement history query interface
-- [ ] Build analytics and statistics generation
-- [ ] Create success rate tracking
-- [ ] Implement material cost tracking
-- [ ] Update relevant documentation in `docs/API_REFERENCE.md`
+- [x] Create print history database/storage (global print_history.json at {PROJECTS_DIR})
+- [x] Implement history query interface (query_print_history with filters)
+- [x] Build analytics and statistics generation (get_print_analytics with aggregation)
+- [x] Create success rate tracking (computed as excellent + good / total * 100)
+- [x] Implement material cost tracking (estimated from print_time * FILAMENT_G_PER_HOUR * FILAMENT_COST_PER_KG)
+- [x] Update relevant documentation in `docs/API_REFERENCE.md`
 
 **Acceptance Criteria:**
-- Print history stored and retrievable
-- Analytics accurate and useful
-- Statistics can be queried by time period
-- Cost tracking functional
+- ✅ Print history stored and retrievable (store_print_history + query_print_history)
+- ✅ Analytics accurate and useful (get_print_analytics with 7 statistics)
+- ✅ Statistics can be queried by time period (days parameter, date range filters)
+- ✅ Cost tracking functional (material_g, material_cost_usd calculated)
+
+**Implementation Details:**
+- Created `store_print_history()` async tool to record print in global history
+- Created `query_print_history()` async tool with project/date/quality filtering
+- Created `get_print_analytics()` async tool computing success_rate, avg_print_time, material usage, costs
+- Added 3 helper functions: _get_history_file, _load_history, _save_history
+- Added FILAMENT_G_PER_HOUR config (default 8.0 g/hour)
+- Imported FILAMENT_COST_PER_KG from src.config
+- Updated monitor_phase_agent to 15 tools (was 12)
+- 16 comprehensive tests all passing
 
 **Available Analytics:**
-- Success rate by model
-- Average print times
-- Material usage trends
-- Cost per project
+- Success rate by model (% excellent + good)
+- Average print times (in seconds)
+- Material usage trends (in grams)
+- Cost per project (in USD)
+- Quality distribution (count by level)
 
 ---
 
