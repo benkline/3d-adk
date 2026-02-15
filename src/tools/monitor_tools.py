@@ -9,7 +9,7 @@ from typing import Optional
 
 from octorest import OctoRest
 
-from src.config import OCTOPRINT_HOST, OCTOPRINT_PORT, OCTOPRINT_API_KEY
+from src.config import OCTOPRINT_HOST, OCTOPRINT_PORT, OCTOPRINT_API_KEY, FILAMENT_COST_PER_KG
 
 # Project directory for storing metrics (patchable in tests)
 PROJECTS_DIR = os.getenv("PROJECTS_DIR", "./projects")
@@ -19,6 +19,9 @@ TEMP_DEVIATION_THRESHOLD_C = float(os.getenv("TEMP_DEVIATION_THRESHOLD_C", "10.0
 TEMP_DEVIATION_DURATION_S = int(os.getenv("TEMP_DEVIATION_DURATION_S", "30"))
 FILAMENT_STALL_DURATION_S = int(os.getenv("FILAMENT_STALL_DURATION_S", "60"))
 LAYER_SHIFT_THRESHOLD_MM = float(os.getenv("LAYER_SHIFT_THRESHOLD_MM", "5.0"))
+
+# Filament usage estimation (for analytics in TICKET-021)
+FILAMENT_G_PER_HOUR = float(os.getenv("FILAMENT_G_PER_HOUR", "8.0"))
 
 logger = logging.getLogger(__name__)
 
@@ -1419,3 +1422,279 @@ async def archive_print_metadata(project_name: str) -> dict:
     except Exception as e:
         logger.error(f"archive_print_metadata: unexpected error: {str(e)}", exc_info=True)
         return {"status": "error", "message": f"Error archiving print metadata: {str(e)}"}
+
+
+# ============================================================================
+# PRINT HISTORY & ANALYTICS TOOLS (TICKET-021)
+# ============================================================================
+
+
+def _get_history_file() -> Path:
+    """Return global print history file path.
+
+    Creates PROJECTS_DIR if it doesn't exist.
+
+    Returns:
+        Path to print_history.json at {PROJECTS_DIR}/print_history.json
+    """
+    history_dir = Path(PROJECTS_DIR)
+    history_dir.mkdir(parents=True, exist_ok=True)
+    return history_dir / "print_history.json"
+
+
+def _load_history() -> list:
+    """Load global print history from JSON file.
+
+    Returns:
+        List of history records, or [] if file doesn't exist or is invalid
+    """
+    history_file = _get_history_file()
+    if not history_file.exists():
+        return []
+    try:
+        with open(history_file) as f:
+            return json.load(f)
+    except (json.JSONDecodeError, IOError):
+        return []
+
+
+def _save_history(records: list):
+    """Save global print history to JSON file.
+
+    Args:
+        records: List of history record dicts to save
+    """
+    history_file = _get_history_file()
+    with open(history_file, "w") as f:
+        json.dump(records, f, indent=2)
+
+
+async def store_print_history(project_name: str) -> dict:
+    """Store completed print data in global print history.
+
+    Should be called after generate_print_summary and record_quality_assessment
+    to make the print retrievable via query_print_history and get_print_analytics.
+
+    Args:
+        project_name: Name of the project
+
+    Returns:
+        dict with keys:
+            - status: "ok" or "error"
+            - history_id: unique identifier for this history record (if ok)
+            - message: human-readable message
+    """
+    if not project_name or not isinstance(project_name, str):
+        logger.warning("store_print_history: empty or invalid project_name")
+        return {"status": "error", "message": "project_name is required"}
+
+    try:
+        monitor_dir = _get_monitor_dir(project_name)
+        summary_file = monitor_dir / "print_summary.json"
+        qa_file = monitor_dir / "quality_assessment.json"
+
+        # Check if summary exists
+        if not summary_file.exists():
+            logger.warning(f"store_print_history: no print summary for {project_name}")
+            return {
+                "status": "error",
+                "message": "No print summary found - run generate_print_summary first"
+            }
+
+        # Load summary and optional quality assessment
+        summary = _load_print_summary(summary_file)
+        quality_assessment = _load_quality_assessment(qa_file)
+
+        # Calculate material usage estimate
+        metrics = summary.get("metrics", {})
+        print_time_s = metrics.get("total_print_time_s", 0)
+        print_time_h = print_time_s / 3600 if print_time_s > 0 else 0
+        material_g = round(print_time_h * FILAMENT_G_PER_HOUR, 2)
+        material_cost = round((material_g / 1000) * FILAMENT_COST_PER_KG, 4)
+
+        # Build history record
+        history_id = f"history_{int(time.time() * 1000)}"
+        record = {
+            "history_id": history_id,
+            "recorded_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "project_name": project_name,
+            "quality": quality_assessment.get("overall_quality"),
+            "print_time_s": print_time_s,
+            "material_g": material_g,
+            "material_cost_usd": material_cost,
+            "alerts_count": summary.get("alerts_count", 0),
+            "interventions_count": summary.get("interventions_count", 0),
+        }
+
+        # Append to global history
+        history = _load_history()
+        history.append(record)
+        _save_history(history)
+
+        logger.info(f"store_print_history: {project_name} stored as {history_id}")
+        return {
+            "status": "ok",
+            "history_id": history_id,
+            "message": f"Print history stored: {history_id}"
+        }
+    except Exception as e:
+        logger.error(f"store_print_history: unexpected error: {str(e)}", exc_info=True)
+        return {"status": "error", "message": f"Error storing print history: {str(e)}"}
+
+
+async def query_print_history(
+    project_name: str = "",
+    start_date: str = "",
+    end_date: str = "",
+    quality_filter: str = ""
+) -> dict:
+    """Query print history with optional filters.
+
+    Args:
+        project_name: Filter by exact project name (optional)
+        start_date: Filter start date as "YYYY-MM-DD" (optional)
+        end_date: Filter end date as "YYYY-MM-DD" (optional)
+        quality_filter: Filter by quality level (optional, e.g. "good")
+
+    Returns:
+        dict with keys:
+            - status: "ok" or "error"
+            - records: list of matching history records
+            - total_count: number of matching records
+            - message: human-readable message
+    """
+    try:
+        history = _load_history()
+
+        # Apply project_name filter
+        if project_name:
+            history = [r for r in history if r.get("project_name") == project_name]
+
+        # Apply start_date filter
+        if start_date:
+            history = [r for r in history if r.get("recorded_at", "") >= start_date]
+
+        # Apply end_date filter (add suffix to include end of day)
+        if end_date:
+            history = [r for r in history if r.get("recorded_at", "") <= end_date + "T99:99:99Z"]
+
+        # Apply quality_filter
+        if quality_filter:
+            valid_qualities = {"excellent", "good", "acceptable", "poor"}
+            if quality_filter.lower() not in valid_qualities:
+                logger.warning(f"query_print_history: invalid quality_filter: {quality_filter}")
+                return {
+                    "status": "error",
+                    "message": f"quality_filter must be one of: {', '.join(valid_qualities)}"
+                }
+            history = [r for r in history if r.get("quality") == quality_filter.lower()]
+
+        logger.info(f"query_print_history: {len(history)} records found")
+        return {
+            "status": "ok",
+            "records": history,
+            "total_count": len(history),
+            "message": f"Found {len(history)} record(s)"
+        }
+    except Exception as e:
+        logger.error(f"query_print_history: unexpected error: {str(e)}", exc_info=True)
+        return {"status": "error", "message": f"Error querying print history: {str(e)}"}
+
+
+async def get_print_analytics(project_name: str = "", days: int = 30) -> dict:
+    """Generate analytics from print history.
+
+    Args:
+        project_name: Filter analytics by project name (optional)
+        days: Number of past days to include (default: 30, use 0 for all time)
+
+    Returns:
+        dict with keys:
+            - status: "ok" or "error"
+            - analytics: dict with aggregated statistics
+            - message: human-readable message
+
+    Analytics returned (when status="ok"):
+        - total_prints: number of prints
+        - success_rate_pct: (excellent + good) / total * 100
+        - avg_print_time_s: average print time in seconds
+        - total_material_g: total material used in grams
+        - total_material_cost_usd: total cost in USD
+        - avg_cost_per_print_usd: average cost per print
+        - quality_distribution: {quality_level: count}
+    """
+    if not isinstance(days, int) or days < 0:
+        logger.warning(f"get_print_analytics: invalid days: {days}")
+        return {"status": "error", "message": "days must be a non-negative integer"}
+
+    try:
+        history = _load_history()
+
+        # Filter by project_name
+        if project_name:
+            history = [r for r in history if r.get("project_name") == project_name]
+
+        # Filter by date range
+        if days > 0:
+            cutoff = time.time() - days * 86400
+            cutoff_iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(cutoff))
+            history = [r for r in history if r.get("recorded_at", "") >= cutoff_iso]
+
+        total = len(history)
+
+        # Return empty analytics if no records
+        if total == 0:
+            logger.info("get_print_analytics: no history found for given filters")
+            return {
+                "status": "ok",
+                "analytics": {
+                    "total_prints": 0,
+                    "success_rate_pct": 0.0,
+                    "avg_print_time_s": 0.0,
+                    "total_material_g": 0.0,
+                    "total_material_cost_usd": 0.0,
+                    "avg_cost_per_print_usd": 0.0,
+                    "quality_distribution": {},
+                },
+                "message": "No print history found for given filters"
+            }
+
+        # Count quality levels
+        quality_counts = {}
+        for r in history:
+            q = r.get("quality", "unknown")
+            quality_counts[q] = quality_counts.get(q, 0) + 1
+
+        # Compute success rate (excellent + good)
+        successful = quality_counts.get("excellent", 0) + quality_counts.get("good", 0)
+        success_rate = round(successful / total * 100, 1)
+
+        # Aggregate time and material stats
+        print_times = [r.get("print_time_s", 0) for r in history]
+        material_g_list = [r.get("material_g", 0.0) for r in history]
+        material_cost_list = [r.get("material_cost_usd", 0.0) for r in history]
+
+        avg_print_time = round(sum(print_times) / total, 1)
+        total_material = round(sum(material_g_list), 2)
+        total_cost = round(sum(material_cost_list), 4)
+        avg_cost = round(total_cost / total, 4)
+
+        analytics = {
+            "total_prints": total,
+            "success_rate_pct": success_rate,
+            "avg_print_time_s": avg_print_time,
+            "total_material_g": total_material,
+            "total_material_cost_usd": total_cost,
+            "avg_cost_per_print_usd": avg_cost,
+            "quality_distribution": quality_counts,
+        }
+
+        logger.info(f"get_print_analytics: {total} prints analyzed")
+        return {
+            "status": "ok",
+            "analytics": analytics,
+            "message": f"Analytics generated from {total} print(s)"
+        }
+    except Exception as e:
+        logger.error(f"get_print_analytics: unexpected error: {str(e)}", exc_info=True)
+        return {"status": "error", "message": f"Error generating analytics: {str(e)}"}

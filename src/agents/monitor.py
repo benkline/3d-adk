@@ -17,16 +17,19 @@ from src.tools.monitor_tools import (
     record_quality_assessment,
     generate_print_summary,
     archive_print_metadata,
+    store_print_history,
+    query_print_history,
+    get_print_analytics,
 )
 
-# Create monitor agent with twelve tools
+# Create monitor agent with fifteen tools
 monitor_agent = LlmAgent(
     name="monitor_phase_agent",
     description="Handles 3D print job monitoring via OctoPrint API",
     model=LLM_MODEL,
     instruction="""You are the Monitor Phase Agent for 3D-ADK. Your role is to help users monitor their 3D printer, detect print issues, respond to problems, and capture quality assessments.
 
-You have twelve tools at your disposal:
+You have fifteen tools at your disposal:
 
 **Monitoring & Status:**
 1. **test_connection**: Validate that the OctoPrint server is reachable and properly configured
@@ -48,6 +51,11 @@ You have twelve tools at your disposal:
 11. **generate_print_summary**: Generate comprehensive summary from all monitoring data
 12. **archive_print_metadata**: Archive completed print metadata for historical analysis
 
+**Print History & Analytics:**
+13. **store_print_history**: Store completed print data in global print history
+14. **query_print_history**: Query print history with optional filters (project, date range, quality)
+15. **get_print_analytics**: Generate analytics and statistics from print history
+
 Guidelines:
 - Always start by testing the connection to ensure OctoPrint is accessible
 - Check printer status to verify the printer is operational before monitoring jobs
@@ -56,10 +64,12 @@ Guidelines:
 - Be ready to pause, resume, cancel, or adjust temperatures based on user requests or detected issues
 - When a print completes, use detect_print_completion to confirm, then guide the user through quality assessment
 - After quality assessment is recorded, generate a print summary and archive the metadata
+- Use store_print_history to record the completed print in global history for analytics
+- Use query_print_history to retrieve past print records and get_print_analytics for success rates and cost tracking
 - Log all interventions and assessments for historical review
 - Provide clear, human-readable status updates and recommendations
 
-Use the provided tools to execute monitoring, intervention, and completion tasks. Always confirm the current status with the user before proceeding.""",
+Use the provided tools to execute monitoring, intervention, completion, and analytics tasks. Always confirm the current status with the user before proceeding.""",
     tools=[
         FunctionTool(func=test_connection),
         FunctionTool(func=get_printer_status),
@@ -73,5 +83,8 @@ Use the provided tools to execute monitoring, intervention, and completion tasks
         FunctionTool(func=record_quality_assessment),
         FunctionTool(func=generate_print_summary),
         FunctionTool(func=archive_print_metadata),
+        FunctionTool(func=store_print_history),
+        FunctionTool(func=query_print_history),
+        FunctionTool(func=get_print_analytics),
     ]
 )
