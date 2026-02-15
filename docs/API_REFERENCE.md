@@ -422,9 +422,191 @@ result = await export_model("my_project", "stl")
 ```
 
 ### Monitor Agent
-**Purpose:** Monitor 3D print execution
+**Purpose:** Monitor 3D printer status and print jobs via OctoPrint
 
-**Workflow:** Connect → Monitor → Detect Issues → Complete
+**Workflow:** Connect → Printer Status → Job Status → Monitoring Loop
+
+**Implementation:** `google.adk.agents.LlmAgent` with three `FunctionTool`-wrapped functions
+
+**Agent Name:** `monitor_phase_agent`
+
+**Model:** Uses configured `LLM_MODEL` from `src.config`
+
+**Tools:**
+
+#### `test_connection(host: str = "", port: str = "", api_key: str = "") -> dict`
+Test connection to OctoPrint server.
+
+**Parameters:**
+- `host` (str): OctoPrint server hostname/IP (empty string to use config default)
+- `port` (str): OctoPrint port as string (empty string to use config default)
+- `api_key` (str): OctoPrint API key (empty string to use config default)
+
+**Config Fallbacks:**
+When parameters are empty, falls back to environment variables:
+- `OCTOPRINT_HOST` (default: "localhost")
+- `OCTOPRINT_PORT` (default: "5000")
+- `OCTOPRINT_API_KEY` (no default; required)
+
+**Returns:** dict with keys:
+- `status` (str): "ok" or "error"
+- `server_version` (str): OctoPrint server version (if ok)
+- `api_version` (str): OctoPrint API version (if ok)
+- `message` (str): Human-readable status or error message
+
+**Example Success Response:**
+```json
+{
+  "status": "ok",
+  "server_version": "1.8.7",
+  "api_version": "0.1",
+  "message": "Successfully connected to OctoPrint 1.8.7"
+}
+```
+
+**Example Error Response:**
+```json
+{
+  "status": "error",
+  "message": "Failed to connect to OctoPrint: Connection refused"
+}
+```
+
+**Error Handling:** Returns error dict with message rather than raising exceptions
+
+---
+
+#### `get_printer_status(host: str = "", port: str = "", api_key: str = "") -> dict`
+Get current printer state and temperature readings.
+
+**Parameters:**
+- `host` (str): OctoPrint server hostname/IP (empty to use config default)
+- `port` (str): OctoPrint port as string (empty to use config default)
+- `api_key` (str): OctoPrint API key (empty to use config default)
+
+**Returns:** dict with keys:
+- `status` (str): "ok" or "error"
+- `state` (str): Printer state ("Operational", "Printing", "Paused", "Offline", etc.)
+- `bed_temp` (dict or null): `{"current": float, "target": float}` or null if unavailable
+- `nozzle_temp` (dict or null): `{"current": float, "target": float}` or null if unavailable
+- `message` (str): Human-readable status or error message
+
+**Example Response:**
+```json
+{
+  "status": "ok",
+  "state": "Printing",
+  "bed_temp": {
+    "current": 60.0,
+    "target": 60
+  },
+  "nozzle_temp": {
+    "current": 210.0,
+    "target": 210
+  },
+  "message": "Printer state: Printing"
+}
+```
+
+**Error Handling:** Returns error dict with message rather than raising exceptions
+
+---
+
+#### `get_job_status(host: str = "", port: str = "", api_key: str = "") -> dict`
+Get active print job information and progress.
+
+**Parameters:**
+- `host` (str): OctoPrint server hostname/IP (empty to use config default)
+- `port` (str): OctoPrint port as string (empty to use config default)
+- `api_key` (str): OctoPrint API key (empty to use config default)
+
+**Returns:** dict with keys:
+- `status` (str): "ok" or "error"
+- `state` (str or null): Job state ("Printing", "Paused", etc.) or null if no active job
+- `progress` (dict or null): Progress information or null if no active job
+  - `completion` (float): Percentage complete (0-100)
+  - `filepos` (int): Current position in file (bytes)
+  - `printtime` (int): Elapsed print time (seconds)
+  - `printtime_left` (int): Estimated remaining time (seconds)
+- `filename` (str or null): Current print filename or null if no active job
+- `message` (str): Human-readable status or error message
+
+**Example Response - Active Job:**
+```json
+{
+  "status": "ok",
+  "state": "Printing",
+  "progress": {
+    "completion": 45.5,
+    "filepos": 123456,
+    "printtime": 1800,
+    "printtime_left": 2200
+  },
+  "filename": "phone_stand.gcode",
+  "message": "Job state: Printing"
+}
+```
+
+**Example Response - No Active Job:**
+```json
+{
+  "status": "ok",
+  "state": null,
+  "progress": null,
+  "filename": null,
+  "message": "No active print job"
+}
+```
+
+**Error Handling:** Returns error dict with message rather than raising exceptions
+
+---
+
+**OctoPrintClient Class:**
+Internal class used by tool functions. Provides low-level OctoPrint API access.
+
+**Constructor:**
+```python
+client = OctoPrintClient(host: str, port: int, api_key: str)
+```
+
+**Methods:**
+- `test_connection() -> dict` — Test server connectivity
+- `get_printer_status() -> dict` — Get printer state and temps
+- `get_job_status() -> dict` — Get active job information
+
+**Validation:** Constructor validates all parameters and raises `ValueError` if invalid
+
+---
+
+**Configuration:**
+Configure OctoPrint connection via environment variables or `.env` file:
+```bash
+OCTOPRINT_HOST=192.168.1.100
+OCTOPRINT_PORT=5000
+OCTOPRINT_API_KEY=your-api-key-here
+```
+
+Optional config variables (with defaults):
+- `OCTOPRINT_HOST` (default: "localhost")
+- `OCTOPRINT_PORT` (default: "5000")
+- `OCTOPRINT_API_KEY` (no default; must be provided)
+
+**Requirements:**
+- OctoPrint server must be running and accessible
+- Valid API key required for authentication
+- Network connectivity to printer server
+
+---
+
+**Output Structure:**
+Monitor phase outputs stored in `{PROJECTS_DIR}/{project_name}/print/`:
+```
+print/
+├── print_history.json       # Historical print records
+├── connection_log.json      # Connection test results
+└── metrics/                 # Real-time metrics (added by TICKET-017)
+```
 
 See: [../specs/MONITOR_AGENT_SPEC.md](../specs/MONITOR_AGENT_SPEC.md)
 
