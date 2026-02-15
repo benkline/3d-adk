@@ -349,7 +349,7 @@ simple_box();
 ---
 
 ### TICKET-011: Model Rendering & Preview
-**Status:** TODO
+**Status:** DONE
 **Priority:** P2
 **Phase:** Modeling Agent
 **Depends on:** TICKET-010
@@ -358,18 +358,29 @@ simple_box();
 Generate preview images of OpenSCAD models.
 
 **Tasks:**
-- [ ] Integrate OpenSCAD CLI for rendering
-- [ ] Generate multiple perspective views
-- [ ] Create preview image storage
-- [ ] Implement quality/resolution settings
-- [ ] Add error handling for render failures
-- [ ] Update relevant documentation in `docs/API_REFERENCE.md`
+- [x] Integrate OpenSCAD CLI for rendering
+- [x] Generate multiple perspective views
+- [x] Create preview image storage
+- [x] Implement quality/resolution settings
+- [x] Add error handling for render failures
+- [x] Update relevant documentation in `docs/API_REFERENCE.md`
 
 **Acceptance Criteria:**
-- Generates preview images successfully
-- Multiple viewing angles available
-- Images are clear and properly scaled
-- Handles render errors gracefully
+- ✅ Generates preview images successfully
+- ✅ Multiple viewing angles available (7 perspectives supported)
+- ✅ Images are clear and properly scaled (configurable resolution 256-1024)
+- ✅ Handles render errors gracefully (per-perspective error handling)
+
+**Implementation Details:**
+- Added `render_preview()` async tool with support for 7 viewing angles
+- Configurable resolution parameter (256-1024 pixels, default 512)
+- Default perspectives: front, isometric, top
+- Graceful degradation when OpenSCAD binary missing (returns pending status)
+- 6 comprehensive tests all passing
+- Updated modeling_agent to include render_preview as 5th tool
+- Full API documentation with examples
+
+**Created PR:** https://github.com/benkline/3d-adk/pull/9
 
 ---
 
