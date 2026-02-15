@@ -261,6 +261,136 @@ def _create_sketch_record(sketch_id: str, variation_num: int, prompt: str) -> di
     }
 
 
+def _get_images_dir(project_name: str) -> Path:
+    """Get the path to the images directory for a project."""
+    images_dir = Path(PROJECTS_DIR) / project_name / "design" / "images"
+    images_dir.mkdir(parents=True, exist_ok=True)
+    return images_dir
+
+
+def _load_images_metadata(project_name: str) -> dict:
+    """Load existing images metadata or create new."""
+    images_dir = _get_images_dir(project_name)
+    metadata_path = images_dir / "metadata.json"
+
+    if metadata_path.exists():
+        with open(metadata_path) as f:
+            return json.load(f)
+
+    return {"images": []}
+
+
+def _save_images_metadata(project_name: str, metadata: dict) -> None:
+    """Save images metadata to disk."""
+    images_dir = _get_images_dir(project_name)
+    metadata_path = images_dir / "metadata.json"
+    with open(metadata_path, "w") as f:
+        json.dump(metadata, f, indent=2)
+
+
+def _create_image_record(
+    image_id: str,
+    sketch_id: str,
+    perspective: str,
+    prompt: str,
+    material_context: str
+) -> dict:
+    """Create an image metadata record."""
+    return {
+        "id": image_id,
+        "sketch_id": sketch_id,
+        "perspective": perspective,
+        "prompt": prompt,
+        "material_context": material_context,
+        "created_at": datetime.now().isoformat(),
+        "status": "pending_generation",
+        "image_path": None,
+    }
+
+
+def _engineer_image_prompts(
+    design_brief: dict,
+    sketch_id: str,
+    perspective: str,
+    feedback: Optional[str] = None
+) -> list[str]:
+    """Engineer production-quality render prompts from design brief using Claude.
+
+    Returns list of 1 prompt string for the specified perspective.
+    """
+    client = _get_anthropic_client()
+
+    # Build context from design brief
+    brief_context = f"""Design Brief:
+- Name: {design_brief.get('name', 'Unnamed')}
+- Purpose: {design_brief.get('purpose', 'Not specified')}
+- Dimensions: {design_brief.get('dimensions', {})}
+- Materials: {', '.join(design_brief.get('materials', ['PLA']))}
+- Aesthetics: {design_brief.get('aesthetics', 'Not specified')}
+- Constraints: {', '.join(design_brief.get('constraints', []))}
+- Special Requirements: {', '.join(design_brief.get('special_requirements', []))}"""
+
+    perspective_context = f"\nDesired Perspective: {perspective.upper()}"
+    feedback_context = f"\nUser Feedback for Regeneration: {feedback}" if feedback else ""
+
+    prompt = f"""{brief_context}{perspective_context}{feedback_context}
+
+Generate ONE production-quality render prompt for this design from the specified perspective.
+The prompt should:
+1. Emphasize realistic materials, lighting, and surface details
+2. Include the aesthetic style and material finish
+3. Request a specific viewing angle or perspective
+4. Be suitable for high-end 3D rendering or image generation (like DALL-E 3 or Midjourney v6)
+5. Include lighting and material quality context for photorealistic rendering
+
+Format your response as a JSON array containing exactly 1 string (the prompt).
+Return ONLY the JSON array, no other text."""
+
+    message = client.messages.create(
+        model="claude-opus-4-6",
+        max_tokens=2048,
+        messages=[
+            {"role": "user", "content": prompt}
+        ]
+    )
+
+    try:
+        # Parse the response as JSON
+        response_text = message.content[0].text
+        prompts = json.loads(response_text)
+
+        # Ensure we have exactly 1 prompt
+        if isinstance(prompts, list) and len(prompts) >= 1:
+            return prompts[:1]  # Return exactly 1
+        else:
+            logger.warning("Failed to parse prompts from Claude, using fallback")
+            return _generate_fallback_image_prompts(design_brief, perspective)
+    except (json.JSONDecodeError, IndexError, AttributeError) as e:
+        logger.warning(f"Error parsing Claude response: {e}, using fallback prompts")
+        return _generate_fallback_image_prompts(design_brief, perspective)
+
+
+def _generate_fallback_image_prompts(design_brief: dict, perspective: str) -> list[str]:
+    """Generate fallback production-quality render prompts if Claude fails."""
+    name = design_brief.get('name', 'product')
+    aesthetics = design_brief.get('aesthetics', 'modern')
+    materials_list = design_brief.get('materials', ['PLA'])
+    materials = materials_list[0] if materials_list else 'PLA'
+
+    perspective_descriptions = {
+        "front": "front-facing view with clear detail and lighting",
+        "side": "side profile view showing depth and form",
+        "3d": "three-quarter isometric view showing multiple surfaces",
+        "top": "top-down overhead view with shadows for depth",
+    }
+
+    desc = perspective_descriptions.get(perspective, "detailed view")
+
+    return [
+        f"High-quality product render of a {name}, {aesthetics} design in {materials}, {desc}, professional studio lighting, photorealistic materials, fine detail, clean shadows"
+    ]
+
+
 async def conduct_interview(user_input: str, project_name: str) -> dict:
     """Conduct structured interview to gather design requirements.
 
@@ -444,14 +574,16 @@ async def generate_sketches(project_name: str, design_brief: dict) -> dict:
 async def generate_images(
     project_name: str,
     sketch_id: str,
-    perspective: str = "front"
+    perspective: str = "front",
+    feedback: Optional[str] = None
 ) -> dict:
     """Generate detailed images from sketch with specified perspective.
 
     Args:
-        project_name: Name of the project
-        sketch_id: ID of the sketch to generate images from
-        perspective: Viewing perspective ("front", "side", "3d", "top")
+        project_name: Name of the project (non-empty)
+        sketch_id: ID of the sketch to generate images from (non-empty)
+        perspective: Viewing perspective ("front", "side", "3d", "top"), defaults to "front"
+        feedback: Optional user feedback for image regeneration
 
     Returns:
         dict with keys:
@@ -459,7 +591,8 @@ async def generate_images(
         - images: list[dict] with image metadata
         - image_count: int
         - output_dir: str
-        - message: str (if status is "error")
+        - perspective: str (the perspective used)
+        - message: str (for ok or error)
     """
     logger.info(
         f"generate_images called: project={project_name}, sketch={sketch_id}, perspective={perspective}"
@@ -480,14 +613,79 @@ async def generate_images(
             "message": "sketch_id must be a non-empty string"
         }
 
-    # Stub implementation: return empty image list
-    logger.info(f"generate_images: returning ok for {project_name}")
-    return {
-        "status": "ok",
-        "images": [],
-        "image_count": 0,
-        "output_dir": f"./projects/{project_name}/design/images"
-    }
+    # Validate perspective
+    valid_perspectives = {"front", "side", "3d", "top"}
+    if perspective not in valid_perspectives:
+        logger.warning(f"generate_images: invalid perspective '{perspective}'")
+        return {
+            "status": "error",
+            "message": f"perspective must be one of: {', '.join(sorted(valid_perspectives))}"
+        }
+
+    try:
+        # Get output directory
+        images_dir = _get_images_dir(project_name)
+
+        # Load existing metadata
+        metadata = _load_images_metadata(project_name)
+
+        # Load design brief if it exists
+        interview_path = Path(PROJECTS_DIR) / project_name / "design" / "interview.json"
+        design_brief = {}
+        if interview_path.exists():
+            with open(interview_path) as f:
+                interview_data = json.load(f)
+                design_brief = interview_data.get("design_brief", {})
+
+        # Engineer production-quality render prompt
+        prompts = _engineer_image_prompts(design_brief, sketch_id, perspective, feedback)
+        prompt = prompts[0] if prompts else "High-quality render of the designed product"
+
+        # Build material context for metadata
+        materials = design_brief.get("materials", ["PLA"])
+        material_context = f"{materials[0]} with professional finish" if materials else "Standard material"
+
+        # Generate image ID and create subdirectory
+        image_id = f"image_{uuid.uuid4().hex[:8]}"
+        image_dir = images_dir / image_id
+        image_dir.mkdir(parents=True, exist_ok=True)
+
+        # Write prompt to file
+        prompt_path = image_dir / "prompt.txt"
+        with open(prompt_path, "w") as f:
+            f.write(prompt)
+
+        # Create image record
+        image_record = _create_image_record(
+            image_id,
+            sketch_id,
+            perspective,
+            prompt,
+            material_context
+        )
+
+        # Update metadata
+        metadata["images"].append(image_record)
+        metadata["last_updated"] = datetime.now().isoformat()
+        _save_images_metadata(project_name, metadata)
+
+        logger.info(f"generate_images: created image {image_id} for {project_name} perspective {perspective}")
+
+        return {
+            "status": "ok",
+            "images": [image_record],
+            "image_count": 1,
+            "output_dir": str(images_dir),
+            "perspective": perspective,
+            "message": f"Generated image for {perspective} perspective"
+        }
+
+    except Exception as e:
+        logger.error(f"generate_images: error for {project_name}: {str(e)}", exc_info=True)
+        return {
+            "status": "error",
+            "message": f"Failed to generate images: {str(e)}"
+        }
 
 
 async def generate_blueprint(

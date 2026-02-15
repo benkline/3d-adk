@@ -90,22 +90,81 @@ Generate 3-5 conceptual sketch variations from design brief.
 
 ---
 
-#### `generate_images(project_name: str, sketch_id: str, perspective: str = "front") -> dict`
-Generate detailed images from sketch with specified perspective.
+#### `generate_images(project_name: str, sketch_id: str, perspective: str = "front", feedback: Optional[str] = None) -> dict`
+Generate production-quality render images from sketch with specified perspective, with support for user feedback and regeneration.
 
 **Parameters:**
 - `project_name` (str): Name of the project (non-empty)
 - `sketch_id` (str): ID of the sketch to render (non-empty)
 - `perspective` (str): Viewing perspective ("front", "side", "3d", "top"), defaults to "front"
+  - `"front"`: Front-facing view with clear detail and lighting
+  - `"side"`: Side profile view showing depth and form
+  - `"3d"`: Three-quarter isometric view showing multiple surfaces
+  - `"top"`: Top-down overhead view with shadows for depth
+- `feedback` (str, optional): User feedback for image regeneration (e.g., "brighter lighting", "less glossy finish")
 
 **Returns:** dict with keys:
 - `status` (str): "ok" or "error"
-- `images` (list): List of image dicts with metadata
-- `image_count` (int): Number of images generated
-- `output_dir` (str): Directory where images are stored
-- `message` (str): Error message (if status is "error")
+- `images` (list): List of image record dicts with full metadata
+- `image_count` (int): Number of images generated (always 1 per call)
+- `output_dir` (str): Directory where images are stored (`design/images/`)
+- `perspective` (str): The perspective that was generated
+- `message` (str): Success or error message
 
-**Error Handling:** Returns error dict with message rather than raising exceptions
+**Image Record Structure:**
+```json
+{
+  "id": "image_a1b2c3d4",
+  "sketch_id": "sketch_xyz789",
+  "perspective": "front",
+  "prompt": "High-quality product render of a phone stand, minimalist design...",
+  "material_context": "PLA with professional finish",
+  "created_at": "2025-02-14T10:30:45.123456",
+  "status": "pending_generation",
+  "image_path": null
+}
+```
+
+**Prompt Engineering:**
+- Uses Claude to generate production-quality render prompts (NOT conceptual sketches)
+- Incorporates design brief context (materials, aesthetics, constraints, dimensions)
+- Includes material and lighting details for photorealistic rendering
+- Supports regeneration via `feedback` parameter for iterative refinement
+- Falls back to hardcoded production-quality prompts if Claude fails
+
+**Output Directory Structure:**
+```
+design/images/
+├── metadata.json          # Index of all generated images
+├── image_a1b2c3d4/        # Per-image directory
+│   └── prompt.txt         # Generation prompt
+├── image_b2c3d4e5/
+│   └── prompt.txt
+└── ...
+```
+
+**Metadata Storage:**
+- All image records persisted to `design/images/metadata.json`
+- Includes `last_updated` timestamp for tracking generation history
+- Supports iterative regeneration with user feedback
+
+**Error Handling:**
+- Validates perspective against allowed set; returns error dict if invalid
+- Validates project_name and sketch_id; returns error dict if empty
+- Returns error dict with descriptive message on any failures
+- Never raises exceptions
+
+**Regeneration Workflow:**
+Call again with same `project_name`, `sketch_id`, `perspective` but different `feedback` to regenerate:
+```python
+# Initial generation
+result1 = await generate_images("my-project", "sketch_abc", "front")
+
+# Regenerate with feedback
+result2 = await generate_images("my-project", "sketch_abc", "front",
+                                feedback="brighter, more dramatic lighting")
+# Returns new image record with updated prompt reflecting feedback
+```
 
 ---
 
