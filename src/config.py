@@ -18,6 +18,9 @@ OCTOPRINT_HOST = os.getenv("OCTOPRINT_HOST", "localhost")
 OCTOPRINT_PORT = os.getenv("OCTOPRINT_PORT", "5000")
 OCTOPRINT_API_KEY = os.getenv("OCTOPRINT_API_KEY")
 
+# OpenSCAD Configuration
+OPENSCAD_PATH = os.getenv("OPENSCAD_PATH", "/usr/local/bin/openscad")
+
 # Logging Configuration
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 
