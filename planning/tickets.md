@@ -311,7 +311,7 @@ Create the basic structure for the Modeling Phase Agent.
 ---
 
 ### TICKET-010: OpenSCAD Code Generation Engine
-**Status:** TODO
+**Status:** DONE
 **Priority:** P1
 **Phase:** Modeling Agent
 **Depends on:** TICKET-009
@@ -320,18 +320,25 @@ Create the basic structure for the Modeling Phase Agent.
 Implement Python-to-OpenSCAD code generation from design specifications.
 
 **Tasks:**
-- [ ] Create OpenSCAD generation engine
-- [ ] Implement parametric design patterns
-- [ ] Build geometric primitive generation
-- [ ] Create multi-part assembly generation
-- [ ] Implement module and function generation
-- [ ] Update relevant documentation in `docs/API_REFERENCE.md`
+- [x] Create OpenSCAD generation engine
+- [x] Implement parametric design patterns
+- [x] Build geometric primitive generation
+- [x] Create multi-part assembly generation
+- [x] Implement module and function generation
+- [x] Update relevant documentation in `docs/API_REFERENCE.md`
 
 **Acceptance Criteria:**
-- Generates valid, compilable OpenSCAD code
-- Supports parametric dimensions
-- Handles simple to moderately complex geometries
-- Code is well-documented and readable
+- ✅ Generates valid, compilable OpenSCAD code
+- ✅ Supports parametric dimensions
+- ✅ Handles simple to moderately complex geometries
+- ✅ Code is well-documented and readable
+
+**Implementation Details:**
+- Created 9 helper functions for modular SCAD generation
+- Added 8 comprehensive tests (all passing)
+- Fixed pre-existing test bug in export_model
+- All 23 tests passing (11 existing + 8 new + 4 export)
+- PR: https://github.com/benkline/3d-adk/pull/8
 
 **Example Generated Code:**
 ```scad
@@ -507,26 +514,35 @@ Test the complete modeling workflow end-to-end.
 Implement OctoPrint API connection and communication.
 
 **Tasks:**
-- [x] Create `src/agents/monitor.py` (combined with TICKET-017)
-- [x] Implement OctoPrint API client wrapper (lazy session singleton)
-- [x] Build connection testing and validation (`connect_to_printer` tool)
-- [x] Implement authentication handling (API key validation, 401 handling)
-- [x] Create error handling and retry logic (comprehensive exception handling)
+- [x] Create `src/agents/monitor.py` (monitor_agent LlmAgent)
+- [x] Implement OctoPrint API client wrapper (OctoPrintClient class)
+- [x] Build connection testing and validation (test_connection tool)
+- [x] Implement authentication handling (API key validation)
+- [x] Create error handling and retry logic (two-tier validation + try/except)
 - [x] Update relevant documentation in `docs/API_REFERENCE.md`
 
 **Acceptance Criteria:**
 - ✅ Successfully connects to OctoPrint instance
-- ✅ API calls work correctly (`get_printer_status` tool)
-- ✅ Connection errors handled gracefully (returns "pending" status)
+- ✅ API calls work correctly
+- ✅ Connection errors handled gracefully
 - ✅ Can query printer status
 
 **Implementation Details:**
-- Lazy HTTP session singleton with header-based authentication
-- Comprehensive error handling with 3-level status codes (ok/error/pending)
-- Full input validation on all tool entry points
-- 5 tests for connection validation including auth failure, unreachable scenarios
+- Created OctoPrintClient class wrapping octorest library
+- Implemented three tools: test_connection, get_printer_status, get_job_status
+- Created monitor_phase_agent LlmAgent with comprehensive instructions
+- Added 28 comprehensive tests (100% passing)
+- Created conftest.py for test environment configuration
+- Full API documentation in API_REFERENCE.md with examples
 
-**PR:** https://github.com/benkline/3d-adk/pull/10
+**Testing:**
+- 28 tests covering all functionality
+- OctoPrintClient validation and connection
+- Tool functions with config fallbacks
+- Error handling and edge cases
+- All tests passing with no warnings
+
+**Created PR:** https://github.com/benkline/3d-adk/pull/7
 
 ---
 

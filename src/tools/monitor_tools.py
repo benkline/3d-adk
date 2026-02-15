@@ -1,467 +1,385 @@
-"""Monitor tools for real-time OctoPrint monitoring and metrics collection."""
+"""Monitor phase tools for OctoPrint API integration and print monitoring."""
 
-import asyncio
-import json
 import logging
-from datetime import datetime, timezone
-from pathlib import Path
+import time
 from typing import Optional
 
-import requests
+from octorest import OctoRest
 
-from src.config import OCTOPRINT_API_KEY, OCTOPRINT_HOST, OCTOPRINT_PORT, PROJECTS_DIR
+from src.config import OCTOPRINT_HOST, OCTOPRINT_PORT, OCTOPRINT_API_KEY
 
 logger = logging.getLogger(__name__)
 
-# Lazy HTTP session singleton
-_http_session = None
 
+class OctoPrintClient:
+    """Thin wrapper around octorest.OctoRest for OctoPrint API access."""
 
-def _get_http_session() -> requests.Session:
-    """Get or create the HTTP session with OctoPrint API key."""
-    global _http_session
-    if _http_session is None:
-        _http_session = requests.Session()
-        if OCTOPRINT_API_KEY:
-            _http_session.headers.update({"X-Api-Key": OCTOPRINT_API_KEY})
-    return _http_session
+    def __init__(self, host: str, port: int, api_key: str):
+        """Initialize OctoPrint client.
 
+        Args:
+            host: OctoPrint server hostname/IP
+            port: OctoPrint server port
+            api_key: OctoPrint API key for authentication
 
-def _octoprint_url(path: str) -> str:
-    """Construct OctoPrint API URL."""
-    return f"http://{OCTOPRINT_HOST}:{OCTOPRINT_PORT}/api/{path}"
+        Raises:
+            ValueError: If any parameter is invalid
+        """
+        if not isinstance(host, str) or not host.strip():
+            raise ValueError("host must be a non-empty string")
+        if not isinstance(port, int) or port <= 0 or port > 65535:
+            raise ValueError("port must be an integer between 1 and 65535")
+        if not isinstance(api_key, str) or not api_key.strip():
+            raise ValueError("api_key must be a non-empty string")
 
+        self.host = host
+        self.port = int(port)
+        self.api_key = api_key
+        self._client = None
 
-def _get_monitor_dir(project_name: str) -> Path:
-    """Create and return the monitor directory for a project."""
-    monitor_dir = Path(PROJECTS_DIR) / project_name / "monitor"
-    monitor_dir.mkdir(parents=True, exist_ok=True)
-    return monitor_dir
+    def _get_client(self) -> OctoRest:
+        """Get or create OctoRest client instance."""
+        if self._client is None:
+            self._client = OctoRest(
+                basedir=f"http://{self.host}:{self.port}",
+                apikey=self.api_key,
+            )
+        return self._client
 
+    def test_connection(self) -> dict:
+        """Test connection to OctoPrint server.
 
-def _load_metrics(project_name: str) -> list:
-    """Load all metrics from JSONL file. Returns empty list if file doesn't exist."""
-    metrics_path = _get_monitor_dir(project_name) / "metrics.jsonl"
-    if not metrics_path.exists():
-        return []
+        Returns:
+            dict with keys:
+                - status: "ok" or "error"
+                - server_version: OctoPrint server version (if ok)
+                - api_version: OctoPrint API version (if ok)
+                - message: human-readable message
+        """
+        try:
+            client = self._get_client()
+            version_info = client.get_version()
 
-    metrics = []
-    try:
-        with open(metrics_path, "r") as f:
-            for line in f:
-                if line.strip():
-                    metrics.append(json.loads(line))
-    except (json.JSONDecodeError, IOError) as e:
-        logger.warning(f"Could not load metrics from {metrics_path}: {e}")
-        return []
-
-    return metrics
-
-
-def _save_metric(project_name: str, snapshot: dict) -> None:
-    """Append a metric snapshot to the JSONL file."""
-    metrics_path = _get_monitor_dir(project_name) / "metrics.jsonl"
-    with open(metrics_path, "a") as f:
-        f.write(json.dumps(snapshot) + "\n")
-
-
-def _format_snapshot(printer_data: dict, job_data: dict) -> dict:
-    """Format printer and job data into the standard status snapshot."""
-    timestamp = datetime.now(timezone.utc).isoformat()
-
-    # Extract temperatures
-    bed_temp = printer_data.get("bed", {})
-    nozzle_temp = printer_data.get("tool0", {})
-
-    # Extract job progress
-    progress_data = job_data.get("progress", {})
-
-    return {
-        "timestamp": timestamp,
-        "state": job_data.get("state", "unknown"),
-        "progress": progress_data.get("completion"),
-        "current_layer": None,  # OctoPrint API doesn't provide layer info directly
-        "print_time_elapsed": job_data.get("progress", {}).get("printTime"),
-        "print_time_remaining": job_data.get("progress", {}).get("printTimeLeft"),
-        "bed_temp": {
-            "current": bed_temp.get("actual"),
-            "target": bed_temp.get("target"),
-        },
-        "nozzle_temp": {
-            "current": nozzle_temp.get("actual"),
-            "target": nozzle_temp.get("target"),
-        },
-    }
-
-
-async def connect_to_printer(project_name: str) -> dict:
-    """
-    Test OctoPrint connection and validate API configuration.
-
-    TICKET-016: OctoPrint API Integration - Connection and validation.
-
-    Args:
-        project_name: Name of the project
-
-    Returns:
-        {
-            "status": "ok"|"error"|"pending",
-            "octoprint_version": "string",
-            "printer_connected": bool,
-            "message": "string"
-        }
-    """
-    logger.info(f"connect_to_printer called: project={project_name}")
-
-    # Input validation
-    if not isinstance(project_name, str) or not project_name.strip():
-        logger.warning("connect_to_printer: empty project_name")
-        return {
-            "status": "error",
-            "message": "project_name must be a non-empty string",
-        }
-
-    # Check API key
-    if not OCTOPRINT_API_KEY:
-        logger.warning("connect_to_printer: OCTOPRINT_API_KEY not set")
-        return {
-            "status": "error",
-            "message": "OCTOPRINT_API_KEY environment variable not set",
-        }
-
-    try:
-        session = _get_http_session()
-        url = _octoprint_url("version")
-
-        response = session.get(url, timeout=5)
-
-        if response.status_code == 401:
-            logger.error("connect_to_printer: authentication failed (401)")
+            if version_info:
+                return {
+                    "status": "ok",
+                    "server_version": version_info.get("server", "unknown"),
+                    "api_version": version_info.get("api", "unknown"),
+                    "message": f"Successfully connected to OctoPrint {version_info.get('server', 'unknown')}",
+                }
+            else:
+                return {
+                    "status": "error",
+                    "message": "Failed to retrieve version info from OctoPrint",
+                }
+        except Exception as e:
+            logger.error(f"test_connection: error connecting to {self.host}:{self.port}: {str(e)}", exc_info=True)
             return {
                 "status": "error",
-                "message": "OctoPrint authentication failed. Check OCTOPRINT_API_KEY.",
+                "message": f"Failed to connect to OctoPrint: {str(e)}",
             }
 
-        if response.status_code != 200:
-            logger.warning(
-                f"connect_to_printer: unexpected status {response.status_code}"
-            )
-            return {
-                "status": "pending",
-                "message": f"OctoPrint not reachable at {OCTOPRINT_HOST}:{OCTOPRINT_PORT} (HTTP {response.status_code})",
-            }
+    def get_printer_status(self) -> dict:
+        """Get current printer state and temperatures.
 
-        version_data = response.json()
+        Returns:
+            dict with keys:
+                - status: "ok" or "error"
+                - state: printer state (Operational, Printing, Paused, etc.)
+                - bed_temp: {"current": float, "target": float} or null
+                - nozzle_temp: {"current": float, "target": float} or null
+                - message: human-readable message
+        """
+        try:
+            client = self._get_client()
+            printer_info = client.get_printer()
 
-        # Get printer connection status
-        printer_response = session.get(_octoprint_url("printer"), timeout=5)
-        printer_connected = (
-            printer_response.status_code == 200
-            and printer_response.json().get("state", {}).get("operational", False)
-        )
+            if not printer_info:
+                return {
+                    "status": "error",
+                    "message": "Failed to retrieve printer status",
+                }
 
-        logger.info(
-            f"connect_to_printer: success - version={version_data.get('api', 'unknown')}, printer_connected={printer_connected}"
-        )
-        return {
-            "status": "ok",
-            "octoprint_version": version_data.get("api", "unknown"),
-            "server_version": version_data.get("server", "unknown"),
-            "printer_connected": printer_connected,
-            "message": "Connected to OctoPrint successfully",
-        }
+            # Extract state
+            state = printer_info.get("state", {}).get("text", "Unknown")
 
-    except requests.exceptions.ConnectionError:
-        logger.warning(
-            f"connect_to_printer: connection error to {OCTOPRINT_HOST}:{OCTOPRINT_PORT}"
-        )
-        return {
-            "status": "pending",
-            "message": f"Cannot reach OctoPrint at {OCTOPRINT_HOST}:{OCTOPRINT_PORT}",
-        }
-    except requests.exceptions.Timeout:
-        logger.warning("connect_to_printer: timeout")
-        return {
-            "status": "pending",
-            "message": "OctoPrint connection timeout (5s)",
-        }
-    except Exception as e:
-        logger.error(f"connect_to_printer: error for {project_name}: {str(e)}", exc_info=True)
-        return {
-            "status": "error",
-            "message": f"Failed to connect to OctoPrint: {str(e)}",
-        }
+            # Extract temperature info
+            temps = printer_info.get("temperature", {})
+            bed_temp = None
+            nozzle_temp = None
 
+            if "bed" in temps:
+                bed_data = temps["bed"]
+                bed_temp = {
+                    "current": bed_data.get("actual", 0),
+                    "target": bed_data.get("target", 0),
+                }
 
-async def get_print_status(project_name: str) -> dict:
-    """
-    Query real-time printer and job status.
+            if "tool0" in temps:
+                tool_data = temps["tool0"]
+                nozzle_temp = {
+                    "current": tool_data.get("actual", 0),
+                    "target": tool_data.get("target", 0),
+                }
 
-    TICKET-016/017: Monitors current print job progress, temperatures, and time estimates.
-
-    Args:
-        project_name: Name of the project
-
-    Returns:
-        {
-            "status": "ok"|"error"|"pending",
-            "timestamp": "ISO-8601",
-            "state": "printing|paused|idle|...",
-            "progress": 45.2,
-            "current_layer": int|null,
-            "print_time_elapsed": int|null (seconds),
-            "print_time_remaining": int|null (seconds),
-            "bed_temp": {"current": float, "target": float},
-            "nozzle_temp": {"current": float, "target": float},
-            "message": "string"
-        }
-    """
-    logger.info(f"get_print_status called: project={project_name}")
-
-    # Input validation
-    if not isinstance(project_name, str) or not project_name.strip():
-        logger.warning("get_print_status: empty project_name")
-        return {
-            "status": "error",
-            "message": "project_name must be a non-empty string",
-        }
-
-    # Check API key
-    if not OCTOPRINT_API_KEY:
-        logger.warning("get_print_status: OCTOPRINT_API_KEY not set")
-        return {
-            "status": "error",
-            "message": "OCTOPRINT_API_KEY environment variable not set",
-        }
-
-    try:
-        session = _get_http_session()
-
-        # Get printer state
-        printer_response = session.get(_octoprint_url("printer"), timeout=5)
-        if printer_response.status_code != 200:
-            logger.warning(
-                f"get_print_status: printer API returned {printer_response.status_code}"
-            )
-            return {
-                "status": "pending",
-                "message": f"OctoPrint not reachable (printer API returned {printer_response.status_code})",
-            }
-
-        printer_data = printer_response.json()
-
-        # Get job progress
-        job_response = session.get(_octoprint_url("job"), timeout=5)
-        if job_response.status_code != 200:
-            logger.warning(f"get_print_status: job API returned {job_response.status_code}")
-            return {
-                "status": "pending",
-                "message": f"OctoPrint job query failed (HTTP {job_response.status_code})",
-            }
-
-        job_data = job_response.json()
-
-        # Format and return status snapshot
-        snapshot = _format_snapshot(printer_data, job_data)
-        snapshot["status"] = "ok"
-        snapshot["message"] = "Print status retrieved successfully"
-
-        logger.info(f"get_print_status: success - state={snapshot['state']}, progress={snapshot['progress']}")
-        return snapshot
-
-    except requests.exceptions.ConnectionError:
-        logger.warning(f"get_print_status: connection error to {OCTOPRINT_HOST}:{OCTOPRINT_PORT}")
-        return {
-            "status": "pending",
-            "message": f"Cannot reach OctoPrint at {OCTOPRINT_HOST}:{OCTOPRINT_PORT}",
-        }
-    except requests.exceptions.Timeout:
-        logger.warning("get_print_status: timeout")
-        return {
-            "status": "pending",
-            "message": "OctoPrint status query timeout",
-        }
-    except Exception as e:
-        logger.error(f"get_print_status: error for {project_name}: {str(e)}", exc_info=True)
-        return {
-            "status": "error",
-            "message": f"Failed to get print status: {str(e)}",
-        }
-
-
-async def collect_metrics(project_name: str, poll_count: int = 1) -> dict:
-    """
-    Collect and persist metric snapshots from the printer.
-
-    TICKET-017: Real-time monitoring - metric collection with logging and storage.
-
-    Args:
-        project_name: Name of the project
-        poll_count: Number of snapshots to collect (1-60), default 1
-
-    Returns:
-        {
-            "status": "ok"|"error"|"pending",
-            "snapshots_collected": int,
-            "metrics_file": "path/to/metrics.jsonl",
-            "message": "string"
-        }
-    """
-    logger.info(f"collect_metrics called: project={project_name}, poll_count={poll_count}")
-
-    # Input validation
-    if not isinstance(project_name, str) or not project_name.strip():
-        logger.warning("collect_metrics: empty project_name")
-        return {
-            "status": "error",
-            "message": "project_name must be a non-empty string",
-        }
-
-    if not isinstance(poll_count, int) or poll_count < 1 or poll_count > 60:
-        logger.warning(f"collect_metrics: invalid poll_count={poll_count}")
-        return {
-            "status": "error",
-            "message": "poll_count must be an integer between 1 and 60",
-        }
-
-    try:
-        snapshots_collected = 0
-
-        # Collect snapshots
-        for i in range(poll_count):
-            status_result = await get_print_status(project_name)
-
-            if status_result["status"] == "ok":
-                # Save this snapshot to metrics
-                snapshot = {k: v for k, v in status_result.items() if k != "message"}
-                _save_metric(project_name, snapshot)
-                snapshots_collected += 1
-            elif status_result["status"] == "pending":
-                # OctoPrint not reachable
-                logger.warning(f"collect_metrics: OctoPrint unavailable on iteration {i+1}")
-                if snapshots_collected == 0:
-                    return {
-                        "status": "pending",
-                        "snapshots_collected": 0,
-                        "message": status_result["message"],
-                    }
-            else:
-                # Error
-                logger.error(f"collect_metrics: error on iteration {i+1}: {status_result['message']}")
-                if snapshots_collected == 0:
-                    return {
-                        "status": "error",
-                        "snapshots_collected": 0,
-                        "message": status_result["message"],
-                    }
-
-            # Brief delay between polls if collecting multiple
-            if i < poll_count - 1:
-                await asyncio.sleep(0.1)
-
-        metrics_path = _get_monitor_dir(project_name) / "metrics.jsonl"
-        logger.info(f"collect_metrics: collected {snapshots_collected} snapshots")
-
-        return {
-            "status": "ok",
-            "snapshots_collected": snapshots_collected,
-            "metrics_file": str(metrics_path),
-            "message": f"Collected {snapshots_collected} metric snapshot(s)",
-        }
-
-    except Exception as e:
-        logger.error(f"collect_metrics: error for {project_name}: {str(e)}", exc_info=True)
-        return {
-            "status": "error",
-            "snapshots_collected": 0,
-            "message": f"Failed to collect metrics: {str(e)}",
-        }
-
-
-async def get_print_summary(project_name: str) -> dict:
-    """
-    Generate a summary report from collected metrics.
-
-    TICKET-017: Real-time monitoring - periodic status summaries.
-
-    Args:
-        project_name: Name of the project
-
-    Returns:
-        {
-            "status": "ok"|"error",
-            "snapshot_count": int,
-            "summary": {
-                "avg_progress": float,
-                "min_bed_temp": float,
-                "max_bed_temp": float,
-                "min_nozzle_temp": float,
-                "max_nozzle_temp": float,
-                "total_print_time": int (seconds),
-                "estimated_remaining": int|null (seconds)
-            },
-            "message": "string"
-        }
-    """
-    logger.info(f"get_print_summary called: project={project_name}")
-
-    # Input validation
-    if not isinstance(project_name, str) or not project_name.strip():
-        logger.warning("get_print_summary: empty project_name")
-        return {
-            "status": "error",
-            "message": "project_name must be a non-empty string",
-        }
-
-    try:
-        metrics = _load_metrics(project_name)
-
-        if not metrics:
-            logger.info("get_print_summary: no metrics found")
             return {
                 "status": "ok",
-                "snapshot_count": 0,
-                "summary": {
-                    "avg_progress": None,
-                    "min_bed_temp": None,
-                    "max_bed_temp": None,
-                    "min_nozzle_temp": None,
-                    "max_nozzle_temp": None,
-                    "total_print_time": None,
-                    "estimated_remaining": None,
-                },
-                "message": "No metrics collected yet",
+                "state": state,
+                "bed_temp": bed_temp,
+                "nozzle_temp": nozzle_temp,
+                "message": f"Printer state: {state}",
+            }
+        except Exception as e:
+            logger.error(f"get_printer_status: error: {str(e)}", exc_info=True)
+            return {
+                "status": "error",
+                "message": f"Failed to get printer status: {str(e)}",
             }
 
-        # Calculate summary statistics
-        progress_values = [m.get("progress") for m in metrics if m.get("progress") is not None]
-        bed_temps = [m.get("bed_temp", {}).get("current") for m in metrics if m.get("bed_temp", {}).get("current") is not None]
-        nozzle_temps = [m.get("nozzle_temp", {}).get("current") for m in metrics if m.get("nozzle_temp", {}).get("current") is not None]
-        print_times = [m.get("print_time_elapsed") for m in metrics if m.get("print_time_elapsed") is not None]
-        remaining_times = [m.get("print_time_remaining") for m in metrics if m.get("print_time_remaining") is not None]
+    def get_job_status(self) -> dict:
+        """Get active print job information.
 
-        summary = {
-            "avg_progress": sum(progress_values) / len(progress_values) if progress_values else None,
-            "min_bed_temp": min(bed_temps) if bed_temps else None,
-            "max_bed_temp": max(bed_temps) if bed_temps else None,
-            "min_nozzle_temp": min(nozzle_temps) if nozzle_temps else None,
-            "max_nozzle_temp": max(nozzle_temps) if nozzle_temps else None,
-            "total_print_time": max(print_times) if print_times else None,
-            "estimated_remaining": remaining_times[-1] if remaining_times else None,
-        }
+        Returns:
+            dict with keys:
+                - status: "ok" or "error"
+                - state: job state (Printing, Paused, etc.) or null if no active job
+                - progress: {"completion": float (0-100), "filepos": int, "printtime": int, "printtime_left": int} or null
+                - filename: current print filename or null
+                - message: human-readable message
+        """
+        try:
+            client = self._get_client()
+            job_info = client.get_job()
 
-        logger.info(f"get_print_summary: generated summary for {len(metrics)} snapshots")
+            if not job_info:
+                return {
+                    "status": "ok",
+                    "state": None,
+                    "progress": None,
+                    "filename": None,
+                    "message": "No active print job",
+                }
 
-        return {
-            "status": "ok",
-            "snapshot_count": len(metrics),
-            "summary": summary,
-            "message": f"Summary generated from {len(metrics)} metric snapshot(s)",
-        }
+            state = job_info.get("state", None)
+            progress_data = job_info.get("progress", {})
 
-    except Exception as e:
-        logger.error(f"get_print_summary: error for {project_name}: {str(e)}", exc_info=True)
+            progress = None
+            if progress_data:
+                progress = {
+                    "completion": progress_data.get("completion", 0),
+                    "filepos": progress_data.get("filepos", 0),
+                    "printtime": progress_data.get("printtime", 0),
+                    "printtime_left": progress_data.get("printtimeLeft", 0),
+                }
+
+            filename = None
+            file_info = job_info.get("file", {})
+            if file_info:
+                filename = file_info.get("name", None)
+
+            return {
+                "status": "ok",
+                "state": state,
+                "progress": progress,
+                "filename": filename,
+                "message": f"Job state: {state}" if state else "No active job",
+            }
+        except Exception as e:
+            logger.error(f"get_job_status: error: {str(e)}", exc_info=True)
+            return {
+                "status": "error",
+                "message": f"Failed to get job status: {str(e)}",
+            }
+
+
+def _get_connection_params(host: str, port: str, api_key: str) -> tuple[str, int, str]:
+    """Get connection parameters, falling back to config values.
+
+    Args:
+        host: hostname (empty string to use config)
+        port: port number (empty string to use config)
+        api_key: API key (empty string to use config)
+
+    Returns:
+        tuple of (host, port, api_key)
+    """
+    final_host = host.strip() if isinstance(host, str) else ""
+    final_port = port.strip() if isinstance(port, str) else ""
+    final_api_key = api_key.strip() if isinstance(api_key, str) else ""
+
+    if not final_host:
+        final_host = OCTOPRINT_HOST
+    if not final_port:
+        final_port = OCTOPRINT_PORT
+    if not final_api_key:
+        final_api_key = OCTOPRINT_API_KEY
+
+    try:
+        final_port = int(final_port)
+    except (ValueError, TypeError):
+        final_port = 5000
+
+    return final_host, final_port, final_api_key
+
+
+def test_connection(host: str = "", port: str = "", api_key: str = "") -> dict:
+    """Test connection to OctoPrint server.
+
+    Falls back to config values (OCTOPRINT_HOST, OCTOPRINT_PORT, OCTOPRINT_API_KEY)
+    for any empty parameters.
+
+    Args:
+        host: OctoPrint hostname (optional)
+        port: OctoPrint port as string (optional)
+        api_key: OctoPrint API key (optional)
+
+    Returns:
+        dict with keys:
+            - status: "ok" or "error"
+            - server_version: server version (if ok)
+            - api_version: API version (if ok)
+            - message: human-readable message
+    """
+    # Validate input types
+    if not isinstance(host, str):
+        logger.warning("test_connection: host must be string")
+        return {"status": "error", "message": "host must be a string"}
+    if not isinstance(port, str):
+        logger.warning("test_connection: port must be string")
+        return {"status": "error", "message": "port must be a string"}
+    if not isinstance(api_key, str):
+        logger.warning("test_connection: api_key must be string")
+        return {"status": "error", "message": "api_key must be a string"}
+
+    final_host, final_port, final_api_key = _get_connection_params(host, port, api_key)
+
+    # Validate final parameters
+    if not final_host or not final_api_key:
+        logger.warning(
+            "test_connection: missing required parameters after fallback (host=%s, api_key=%s)",
+            final_host or "[empty]",
+            "[set]" if final_api_key else "[empty]",
+        )
         return {
             "status": "error",
-            "message": f"Failed to generate summary: {str(e)}",
+            "message": "Missing required OctoPrint credentials (host, api_key)",
         }
+
+    try:
+        client = OctoPrintClient(final_host, final_port, final_api_key)
+        result = client.test_connection()
+        if result["status"] == "ok":
+            logger.info(f"test_connection: successfully connected to {final_host}:{final_port}")
+        else:
+            logger.warning(f"test_connection: failed - {result['message']}")
+        return result
+    except ValueError as e:
+        logger.warning(f"test_connection: invalid parameters: {str(e)}")
+        return {"status": "error", "message": f"Invalid parameters: {str(e)}"}
+    except Exception as e:
+        logger.error(f"test_connection: unexpected error: {str(e)}", exc_info=True)
+        return {"status": "error", "message": f"Unexpected error: {str(e)}"}
+
+
+def get_printer_status(host: str = "", port: str = "", api_key: str = "") -> dict:
+    """Get current printer state and temperatures.
+
+    Falls back to config values for any empty parameters.
+
+    Args:
+        host: OctoPrint hostname (optional)
+        port: OctoPrint port as string (optional)
+        api_key: OctoPrint API key (optional)
+
+    Returns:
+        dict with keys:
+            - status: "ok" or "error"
+            - state: printer state string
+            - bed_temp: {"current": float, "target": float} or null
+            - nozzle_temp: {"current": float, "target": float} or null
+            - message: human-readable message
+    """
+    # Validate input types
+    if not isinstance(host, str):
+        logger.warning("get_printer_status: host must be string")
+        return {"status": "error", "message": "host must be a string"}
+    if not isinstance(port, str):
+        logger.warning("get_printer_status: port must be string")
+        return {"status": "error", "message": "port must be a string"}
+    if not isinstance(api_key, str):
+        logger.warning("get_printer_status: api_key must be string")
+        return {"status": "error", "message": "api_key must be a string"}
+
+    final_host, final_port, final_api_key = _get_connection_params(host, port, api_key)
+
+    # Validate final parameters
+    if not final_host or not final_api_key:
+        logger.warning("get_printer_status: missing required parameters after fallback")
+        return {
+            "status": "error",
+            "message": "Missing required OctoPrint credentials",
+        }
+
+    try:
+        client = OctoPrintClient(final_host, final_port, final_api_key)
+        result = client.get_printer_status()
+        logger.info(f"get_printer_status: retrieved status - {result.get('state', 'unknown')}")
+        return result
+    except ValueError as e:
+        logger.warning(f"get_printer_status: invalid parameters: {str(e)}")
+        return {"status": "error", "message": f"Invalid parameters: {str(e)}"}
+    except Exception as e:
+        logger.error(f"get_printer_status: unexpected error: {str(e)}", exc_info=True)
+        return {"status": "error", "message": f"Unexpected error: {str(e)}"}
+
+
+def get_job_status(host: str = "", port: str = "", api_key: str = "") -> dict:
+    """Get active print job information.
+
+    Falls back to config values for any empty parameters.
+
+    Args:
+        host: OctoPrint hostname (optional)
+        port: OctoPrint port as string (optional)
+        api_key: OctoPrint API key (optional)
+
+    Returns:
+        dict with keys:
+            - status: "ok" or "error"
+            - state: job state string or null
+            - progress: {"completion": float, "filepos": int, "printtime": int, "printtime_left": int} or null
+            - filename: current file name or null
+            - message: human-readable message
+    """
+    # Validate input types
+    if not isinstance(host, str):
+        logger.warning("get_job_status: host must be string")
+        return {"status": "error", "message": "host must be a string"}
+    if not isinstance(port, str):
+        logger.warning("get_job_status: port must be string")
+        return {"status": "error", "message": "port must be a string"}
+    if not isinstance(api_key, str):
+        logger.warning("get_job_status: api_key must be string")
+        return {"status": "error", "message": "api_key must be a string"}
+
+    final_host, final_port, final_api_key = _get_connection_params(host, port, api_key)
+
+    # Validate final parameters
+    if not final_host or not final_api_key:
+        logger.warning("get_job_status: missing required parameters after fallback")
+        return {
+            "status": "error",
+            "message": "Missing required OctoPrint credentials",
+        }
+
+    try:
+        client = OctoPrintClient(final_host, final_port, final_api_key)
+        result = client.get_job_status()
+        logger.info(f"get_job_status: retrieved status - {result.get('state', 'no active job')}")
+        return result
+    except ValueError as e:
+        logger.warning(f"get_job_status: invalid parameters: {str(e)}")
+        return {"status": "error", "message": f"Invalid parameters: {str(e)}"}
+    except Exception as e:
+        logger.error(f"get_job_status: unexpected error: {str(e)}", exc_info=True)
+        return {"status": "error", "message": f"Unexpected error: {str(e)}"}
