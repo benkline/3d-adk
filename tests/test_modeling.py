@@ -210,25 +210,32 @@ class TestExportModel:
     async def test_export_model_with_valid_input_no_binary(self):
         """Test export_model returns pending status when OpenSCAD binary not found."""
         os.environ["ANTHROPIC_API_KEY"] = "test_key"
-        os.environ["OPENSCAD_PATH"] = "/nonexistent/openscad"
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            os.environ["PROJECTS_DIR"] = tmpdir
+            import src.tools.modeling_tools as modeling_tools
+            original_dir = modeling_tools.PROJECTS_DIR
+            original_openscad = modeling_tools.OPENSCAD_PATH
+            modeling_tools.PROJECTS_DIR = tmpdir
+            modeling_tools.OPENSCAD_PATH = "/nonexistent/openscad"
 
-            # Create modeling directory with SCAD file
-            scad_dir = Path(tmpdir) / "test_project" / "modeling" / "scad"
-            scad_dir.mkdir(parents=True, exist_ok=True)
+            try:
+                # Create modeling directory with SCAD file
+                scad_dir = Path(tmpdir) / "test_project" / "modeling" / "scad"
+                scad_dir.mkdir(parents=True, exist_ok=True)
 
-            scad_file = scad_dir / "model.scad"
-            scad_file.write_text("// test scad code")
+                scad_file = scad_dir / "model.scad"
+                scad_file.write_text("// test scad code")
 
-            from src.tools.modeling_tools import export_model
-            result = await export_model("test_project", "stl")
+                from src.tools.modeling_tools import export_model
+                result = await export_model("test_project", "stl")
 
-            assert isinstance(result, dict)
-            assert "status" in result
-            assert result["status"] == "pending"  # Expected when binary not found
-            assert "message" in result
+                assert isinstance(result, dict)
+                assert "status" in result
+                assert result["status"] == "pending"  # Expected when binary not found
+                assert "message" in result
+            finally:
+                modeling_tools.PROJECTS_DIR = original_dir
+                modeling_tools.OPENSCAD_PATH = original_openscad
 
     @pytest.mark.asyncio
     async def test_export_model_with_empty_project_name(self):
@@ -264,7 +271,9 @@ class TestExportModel:
             # Monkeypatch the PROJECTS_DIR in the module
             import src.tools.modeling_tools as modeling_tools
             original_dir = modeling_tools.PROJECTS_DIR
+            original_openscad = modeling_tools.OPENSCAD_PATH
             modeling_tools.PROJECTS_DIR = tmpdir
+            modeling_tools.OPENSCAD_PATH = "/bin/sh"
 
             try:
                 # Create modeling directory but no SCAD file
@@ -278,3 +287,170 @@ class TestExportModel:
                 assert "message" in result
             finally:
                 modeling_tools.PROJECTS_DIR = original_dir
+                modeling_tools.OPENSCAD_PATH = original_openscad
+
+
+class TestExportModelMultiPart:
+    """Tests for multi-part export functionality."""
+
+    @pytest.mark.asyncio
+    async def test_export_model_multi_part_no_binary(self):
+        """Test export_model multi-part returns pending when OpenSCAD binary not found."""
+        os.environ["ANTHROPIC_API_KEY"] = "test_key"
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Monkeypatch the module-level constants
+            import src.tools.modeling_tools as modeling_tools
+            original_dir = modeling_tools.PROJECTS_DIR
+            original_openscad = modeling_tools.OPENSCAD_PATH
+            modeling_tools.PROJECTS_DIR = tmpdir
+            modeling_tools.OPENSCAD_PATH = "/nonexistent/openscad"
+
+            try:
+                # Create multi-part SCAD files
+                scad_dir = Path(tmpdir) / "test_project" / "modeling" / "scad"
+                scad_dir.mkdir(parents=True, exist_ok=True)
+                (scad_dir / "base.scad").write_text("// base")
+                (scad_dir / "lid.scad").write_text("// lid")
+
+                from src.tools.modeling_tools import export_model
+                result = await export_model("test_project", "stl", parts=["base", "lid"])
+
+                assert result["status"] == "pending"
+                assert "message" in result
+            finally:
+                modeling_tools.PROJECTS_DIR = original_dir
+                modeling_tools.OPENSCAD_PATH = original_openscad
+
+    @pytest.mark.asyncio
+    async def test_export_model_multi_part_missing_scad(self):
+        """Test export_model returns error when part SCAD files are missing."""
+        os.environ["ANTHROPIC_API_KEY"] = "test_key"
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            import src.tools.modeling_tools as modeling_tools
+            original_dir = modeling_tools.PROJECTS_DIR
+            original_openscad = modeling_tools.OPENSCAD_PATH
+            modeling_tools.PROJECTS_DIR = tmpdir
+            modeling_tools.OPENSCAD_PATH = "/bin/sh"
+
+            try:
+                # Create only one part's SCAD file
+                scad_dir = Path(tmpdir) / "test_project" / "modeling" / "scad"
+                scad_dir.mkdir(parents=True, exist_ok=True)
+                (scad_dir / "base.scad").write_text("// base")
+                # Missing: lid.scad
+
+                from src.tools.modeling_tools import export_model
+                result = await export_model("test_project", "stl", parts=["base", "lid"])
+
+                assert result["status"] == "error"
+                assert "message" in result
+                assert "lid" in result["message"]
+            finally:
+                modeling_tools.PROJECTS_DIR = original_dir
+                modeling_tools.OPENSCAD_PATH = original_openscad
+
+    @pytest.mark.asyncio
+    async def test_export_model_multi_part_invalid_parts_list(self):
+        """Test export_model returns error with empty parts list."""
+        os.environ["ANTHROPIC_API_KEY"] = "test_key"
+
+        from src.tools.modeling_tools import export_model
+        result = await export_model("test_project", "stl", parts=[])
+
+        assert result["status"] == "error"
+        assert "message" in result
+
+    @pytest.mark.asyncio
+    async def test_export_model_single_file_validation_empty_file(self):
+        """Test export_model returns error when exported file is empty."""
+        os.environ["ANTHROPIC_API_KEY"] = "test_key"
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            import src.tools.modeling_tools as modeling_tools
+            import subprocess
+            original_dir = modeling_tools.PROJECTS_DIR
+            original_openscad = modeling_tools.OPENSCAD_PATH
+            original_run = subprocess.run
+
+            modeling_tools.PROJECTS_DIR = tmpdir
+            # Set OPENSCAD_PATH to something that exists
+            modeling_tools.OPENSCAD_PATH = "/bin/sh"
+
+            try:
+                # Create SCAD file
+                scad_dir = Path(tmpdir) / "test_project" / "modeling" / "scad"
+                scad_dir.mkdir(parents=True, exist_ok=True)
+                (scad_dir / "model.scad").write_text("// test")
+
+                # Mock subprocess.run to create empty output file
+                def mock_run_empty(cmd, **kwargs):
+                    # Find the output file and create empty file
+                    for i, arg in enumerate(cmd):
+                        if arg == "-o" and i + 1 < len(cmd):
+                            Path(cmd[i + 1]).write_text("")  # Empty file
+                            break
+                    return subprocess.CompletedProcess(cmd, 0, b"", b"")
+
+                subprocess.run = mock_run_empty
+
+                from src.tools.modeling_tools import export_model
+                result = await export_model("test_project", "stl")
+
+                # Should fail because file is empty
+                assert result["status"] == "error"
+                assert "message" in result
+                assert "empty" in result["message"].lower() or "invalid" in result["message"].lower()
+            finally:
+                modeling_tools.PROJECTS_DIR = original_dir
+                modeling_tools.OPENSCAD_PATH = original_openscad
+                subprocess.run = original_run
+
+    @pytest.mark.asyncio
+    async def test_export_model_multi_part_returns_export_paths_list(self):
+        """Test export_model multi-part returns export_paths list and parts list."""
+        os.environ["ANTHROPIC_API_KEY"] = "test_key"
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            import src.tools.modeling_tools as modeling_tools
+            import subprocess
+            original_dir = modeling_tools.PROJECTS_DIR
+            original_openscad = modeling_tools.OPENSCAD_PATH
+            original_run = subprocess.run
+
+            modeling_tools.PROJECTS_DIR = tmpdir
+            modeling_tools.OPENSCAD_PATH = "/bin/sh"
+
+            try:
+                # Create SCAD files for parts
+                scad_dir = Path(tmpdir) / "test_project" / "modeling" / "scad"
+                scad_dir.mkdir(parents=True, exist_ok=True)
+                (scad_dir / "base.scad").write_text("// base")
+                (scad_dir / "lid.scad").write_text("// lid")
+
+                # Mock subprocess to create non-empty files
+                def mock_run(cmd, **kwargs):
+                    # Find the output file and create it with content
+                    for i, arg in enumerate(cmd):
+                        if arg == "-o" and i + 1 < len(cmd):
+                            Path(cmd[i + 1]).write_text("dummy model data")
+                            break
+                    return subprocess.CompletedProcess(cmd, 0, b"", b"")
+
+                subprocess.run = mock_run
+
+                from src.tools.modeling_tools import export_model
+                result = await export_model("test_project", "stl", parts=["base", "lid"])
+
+                assert result["status"] == "ok"
+                assert "export_paths" in result
+                assert isinstance(result["export_paths"], list)
+                assert len(result["export_paths"]) == 2
+                assert "parts" in result
+                assert result["parts"] == ["base", "lid"]
+                assert result["export_format"] == "stl"
+            finally:
+                subprocess.run = original_run
+                modeling_tools.PROJECTS_DIR = original_dir
+                modeling_tools.OPENSCAD_PATH = original_openscad
