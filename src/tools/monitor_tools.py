@@ -1005,3 +1005,417 @@ async def adjust_temperature(
     except Exception as e:
         logger.error(f"adjust_temperature: unexpected error: {str(e)}", exc_info=True)
         return {"status": "error", "message": f"Error adjusting temperature: {str(e)}"}
+
+
+# ============================================================================
+# PRINT COMPLETION & QUALITY ASSESSMENT TOOLS (TICKET-020)
+# ============================================================================
+
+
+def _load_quality_assessment(qa_file: Path) -> dict:
+    """Load quality assessment from JSON file.
+
+    Args:
+        qa_file: Path to quality_assessment.json
+
+    Returns:
+        Quality assessment dict or {} if not found
+    """
+    if not qa_file.exists():
+        return {}
+    try:
+        with open(qa_file) as f:
+            return json.load(f)
+    except (json.JSONDecodeError, IOError):
+        return {}
+
+
+def _load_print_summary(summary_file: Path) -> dict:
+    """Load print summary from JSON file.
+
+    Args:
+        summary_file: Path to print_summary.json
+
+    Returns:
+        Print summary dict or {} if not found
+    """
+    if not summary_file.exists():
+        return {}
+    try:
+        with open(summary_file) as f:
+            return json.load(f)
+    except (json.JSONDecodeError, IOError):
+        return {}
+
+
+def _load_archive(archive_file: Path) -> list:
+    """Load print archive list from JSON file.
+
+    Args:
+        archive_file: Path to archive.json
+
+    Returns:
+        List of archived print records or [] if not found
+    """
+    if not archive_file.exists():
+        return []
+    try:
+        with open(archive_file) as f:
+            return json.load(f)
+    except (json.JSONDecodeError, IOError):
+        return []
+
+
+def _aggregate_metrics_summary(snapshots: list) -> dict:
+    """Aggregate statistics from metric snapshots.
+
+    Args:
+        snapshots: List of metric snapshot dicts
+
+    Returns:
+        Dict with aggregated stats
+    """
+    if not snapshots:
+        return {
+            "total_snapshots": 0,
+            "total_print_time_s": 0,
+            "avg_nozzle_temp_c": 0,
+            "max_nozzle_temp_c": 0,
+            "avg_bed_temp_c": 0,
+            "max_bed_temp_c": 0,
+        }
+
+    nozzle_temps = []
+    bed_temps = []
+    total_time = 0
+
+    for snap in snapshots:
+        if snap.get("nozzle_temp") and snap["nozzle_temp"].get("current"):
+            nozzle_temps.append(snap["nozzle_temp"]["current"])
+        if snap.get("bed_temp") and snap["bed_temp"].get("current"):
+            bed_temps.append(snap["bed_temp"]["current"])
+        total_time = max(total_time, snap.get("print_time_elapsed", 0))
+
+    return {
+        "total_snapshots": len(snapshots),
+        "total_print_time_s": total_time,
+        "avg_nozzle_temp_c": sum(nozzle_temps) / len(nozzle_temps) if nozzle_temps else 0,
+        "max_nozzle_temp_c": max(nozzle_temps) if nozzle_temps else 0,
+        "avg_bed_temp_c": sum(bed_temps) / len(bed_temps) if bed_temps else 0,
+        "max_bed_temp_c": max(bed_temps) if bed_temps else 0,
+    }
+
+
+def _generate_post_processing_recommendations(overall_quality: str, issues: list) -> list:
+    """Generate post-processing recommendations based on quality and issues.
+
+    Args:
+        overall_quality: One of "excellent", "good", "acceptable", "poor"
+        issues: List of detected issues
+
+    Returns:
+        List of recommendation strings
+    """
+    recommendations = []
+
+    if overall_quality == "poor":
+        recommendations.append("Consider adjusting print settings (temperature, speed) for next print")
+        recommendations.append("Review nozzle and bed cleanliness")
+        recommendations.append("Check for mechanical issues (bed leveling, loose belts)")
+
+    if overall_quality == "acceptable":
+        recommendations.append("Minor post-processing may be needed")
+        recommendations.append("Consider fine-tuning support removal technique")
+
+    # Check for specific issues
+    has_temp_issues = any(i.get("type") == "temperature_deviation" for i in issues)
+    if has_temp_issues:
+        recommendations.append("Monitor nozzle temperature calibration")
+
+    has_filament_issues = any(i.get("type") == "filament_jam" for i in issues)
+    if has_filament_issues:
+        recommendations.append("Clean nozzle and check filament path")
+
+    has_bed_issues = any(i.get("type") == "bed_adhesion_risk" for i in issues)
+    if has_bed_issues:
+        recommendations.append("Level bed and check adhesion surface (PEI, glass, etc.)")
+
+    if overall_quality in ("excellent", "good"):
+        recommendations.append("Excellent print quality achieved - maintain current settings")
+
+    return recommendations if recommendations else ["Standard finishing techniques sufficient"]
+
+
+async def detect_print_completion(project_name: str, host: str = "", port: str = "", api_key: str = "") -> dict:
+    """Detect if a print job has completed.
+
+    Args:
+        project_name: Name of the project
+        host: OctoPrint hostname (optional, uses config if empty)
+        port: OctoPrint port as string (optional, uses config if empty)
+        api_key: OctoPrint API key (optional, uses config if empty)
+
+    Returns:
+        dict with keys:
+            - status: "ok" or "error"
+            - completed: bool (True if print is complete)
+            - state: current job state
+            - filename: name of completed print file
+            - print_time_elapsed: total print time in seconds
+            - message: human-readable message
+    """
+    if not project_name or not isinstance(project_name, str):
+        logger.warning("detect_print_completion: empty or invalid project_name")
+        return {"status": "error", "message": "project_name is required"}
+
+    try:
+        final_host, final_port, final_api_key = _get_connection_params(host, port, api_key)
+
+        if not final_host or not final_api_key:
+            logger.warning("detect_print_completion: missing required OctoPrint credentials")
+            return {
+                "status": "error",
+                "message": "Missing required OctoPrint credentials (host, api_key)"
+            }
+
+        client = OctoPrintClient(final_host, final_port, final_api_key)
+        job_result = client.get_job_status()
+
+        if job_result["status"] != "ok":
+            return job_result
+
+        # Check if print is complete
+        state = job_result.get("state")
+        progress = job_result.get("progress")
+        filename = job_result.get("filename")
+
+        # Completed if no active job (state is None) or completion == 100%
+        completed = state is None or (progress and progress.get("completion") == 100)
+        print_time = progress.get("printtime", 0) if progress else 0
+
+        logger.info(f"detect_print_completion: {project_name} - completed={completed}, state={state}")
+        return {
+            "status": "ok",
+            "completed": completed,
+            "state": state,
+            "filename": filename,
+            "print_time_elapsed": print_time,
+            "message": f"Print completion check: {'completed' if completed else 'in progress'}"
+        }
+    except ValueError as e:
+        logger.warning(f"detect_print_completion: invalid parameters: {str(e)}")
+        return {"status": "error", "message": f"Invalid parameters: {str(e)}"}
+    except Exception as e:
+        logger.error(f"detect_print_completion: unexpected error: {str(e)}", exc_info=True)
+        return {"status": "error", "message": f"Error detecting print completion: {str(e)}"}
+
+
+async def record_quality_assessment(
+    project_name: str,
+    overall_quality: str,
+    issues_encountered: str = "",
+    user_notes: str = "",
+    photo_path: str = ""
+) -> dict:
+    """Record print quality assessment from user.
+
+    Args:
+        project_name: Name of the project
+        overall_quality: One of "excellent", "good", "acceptable", "poor"
+        issues_encountered: Description of any issues (optional)
+        user_notes: User's additional notes (optional)
+        photo_path: Path to photo/inspection image (optional)
+
+    Returns:
+        dict with keys:
+            - status: "ok" or "error"
+            - assessment_id: unique identifier for this assessment
+            - message: human-readable message
+    """
+    if not project_name or not isinstance(project_name, str):
+        logger.warning("record_quality_assessment: empty or invalid project_name")
+        return {"status": "error", "message": "project_name is required"}
+
+    if not overall_quality or not isinstance(overall_quality, str):
+        logger.warning("record_quality_assessment: empty or invalid overall_quality")
+        return {"status": "error", "message": "overall_quality is required"}
+
+    valid_qualities = {"excellent", "good", "acceptable", "poor"}
+    if overall_quality.lower() not in valid_qualities:
+        logger.warning(f"record_quality_assessment: invalid quality value: {overall_quality}")
+        return {
+            "status": "error",
+            "message": f"overall_quality must be one of: {', '.join(valid_qualities)}"
+        }
+
+    try:
+        monitor_dir = _get_monitor_dir(project_name)
+        qa_file = monitor_dir / "quality_assessment.json"
+
+        # Create assessment record
+        assessment_id = f"qa_{int(time.time() * 1000)}"
+        assessment = {
+            "assessment_id": assessment_id,
+            "overall_quality": overall_quality.lower(),
+            "issues_encountered": issues_encountered,
+            "user_notes": user_notes,
+            "photo_path": photo_path,
+            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        }
+
+        # Save assessment
+        with open(qa_file, "w") as f:
+            json.dump(assessment, f, indent=2)
+
+        logger.info(f"record_quality_assessment: {project_name} - quality={overall_quality}")
+        return {
+            "status": "ok",
+            "assessment_id": assessment_id,
+            "message": f"Quality assessment recorded: {overall_quality}"
+        }
+    except Exception as e:
+        logger.error(f"record_quality_assessment: unexpected error: {str(e)}", exc_info=True)
+        return {"status": "error", "message": f"Error recording quality assessment: {str(e)}"}
+
+
+async def generate_print_summary(project_name: str) -> dict:
+    """Generate comprehensive print summary from all monitoring data.
+
+    Args:
+        project_name: Name of the project
+
+    Returns:
+        dict with keys:
+            - status: "ok" or "error"
+            - summary: comprehensive summary dict (if status="ok")
+            - message: human-readable message
+    """
+    if not project_name or not isinstance(project_name, str):
+        logger.warning("generate_print_summary: empty or invalid project_name")
+        return {"status": "error", "message": "project_name is required"}
+
+    try:
+        monitor_dir = _get_monitor_dir(project_name)
+
+        # Load all data sources
+        metrics_file = monitor_dir / "metrics.jsonl"
+        alerts_file = monitor_dir / "alerts.json"
+        interventions_file = monitor_dir / "interventions.json"
+        qa_file = monitor_dir / "quality_assessment.json"
+
+        # Load metrics
+        snapshots = []
+        if metrics_file.exists():
+            with open(metrics_file) as f:
+                for line_num, line in enumerate(f, 1):
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        snapshots.append(json.loads(line))
+                    except json.JSONDecodeError:
+                        logger.warning(f"generate_print_summary: skipping malformed metrics line {line_num}")
+
+        # Load alerts, interventions, quality assessment
+        alerts = _load_alerts(alerts_file)
+        interventions = _load_interventions(interventions_file)
+        quality_assessment = _load_quality_assessment(qa_file)
+
+        # Aggregate metrics
+        metrics_summary = _aggregate_metrics_summary(snapshots)
+
+        # Generate post-processing recommendations
+        issues = [a for a in alerts]  # alerts are structured issues
+        recommendations = _generate_post_processing_recommendations(
+            quality_assessment.get("overall_quality", "unknown"),
+            issues
+        )
+
+        # Build comprehensive summary
+        summary = {
+            "project_name": project_name,
+            "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "metrics": metrics_summary,
+            "quality_assessment": quality_assessment if quality_assessment else None,
+            "alerts_count": len(alerts),
+            "interventions_count": len(interventions),
+            "post_processing_recommendations": recommendations
+        }
+
+        # Save summary
+        summary_file = monitor_dir / "print_summary.json"
+        with open(summary_file, "w") as f:
+            json.dump(summary, f, indent=2)
+
+        logger.info(f"generate_print_summary: {project_name} - {len(alerts)} alerts, {len(interventions)} interventions")
+        return {
+            "status": "ok",
+            "summary": summary,
+            "message": "Print summary generated successfully"
+        }
+    except Exception as e:
+        logger.error(f"generate_print_summary: unexpected error: {str(e)}", exc_info=True)
+        return {"status": "error", "message": f"Error generating print summary: {str(e)}"}
+
+
+async def archive_print_metadata(project_name: str) -> dict:
+    """Archive completed print metadata for historical analysis.
+
+    Args:
+        project_name: Name of the project
+
+    Returns:
+        dict with keys:
+            - status: "ok" or "error"
+            - archive_id: unique identifier for this archive record
+            - archived_at: timestamp of archival
+            - message: human-readable message
+    """
+    if not project_name or not isinstance(project_name, str):
+        logger.warning("archive_print_metadata: empty or invalid project_name")
+        return {"status": "error", "message": "project_name is required"}
+
+    try:
+        monitor_dir = _get_monitor_dir(project_name)
+        summary_file = monitor_dir / "print_summary.json"
+        archive_file = monitor_dir / "archive.json"
+
+        # Check if summary exists
+        if not summary_file.exists():
+            logger.warning(f"archive_print_metadata: no print summary for {project_name}")
+            return {
+                "status": "error",
+                "message": "No print summary found - run generate_print_summary first"
+            }
+
+        # Load summary
+        summary = _load_print_summary(summary_file)
+
+        # Create archive record
+        archive_id = f"archive_{int(time.time() * 1000)}"
+        archived_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        archive_record = {
+            "archive_id": archive_id,
+            "archived_at": archived_at,
+            "project_name": project_name,
+            "summary": summary
+        }
+
+        # Load existing archive and append
+        archive_list = _load_archive(archive_file)
+        archive_list.append(archive_record)
+
+        # Save archive
+        with open(archive_file, "w") as f:
+            json.dump(archive_list, f, indent=2)
+
+        logger.info(f"archive_print_metadata: {project_name} archived as {archive_id}")
+        return {
+            "status": "ok",
+            "archive_id": archive_id,
+            "archived_at": archived_at,
+            "message": f"Print metadata archived: {archive_id}"
+        }
+    except Exception as e:
+        logger.error(f"archive_print_metadata: unexpected error: {str(e)}", exc_info=True)
+        return {"status": "error", "message": f"Error archiving print metadata: {str(e)}"}

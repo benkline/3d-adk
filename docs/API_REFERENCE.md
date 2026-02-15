@@ -710,11 +710,11 @@ result = await optimize_parameters("my_project", printability_report=result["rep
 ```
 
 ### Monitor Agent
-**Purpose:** Monitor 3D printer status and print jobs via OctoPrint
+**Purpose:** Monitor 3D printer status and print jobs via OctoPrint, detect issues, and capture quality assessments
 
-**Workflow:** Connect → Printer Status → Job Status → Monitoring Loop
+**Workflow:** Connect → Printer Status → Job Status → Monitoring Loop → Completion Detection → Quality Assessment → Summary & Archive
 
-**Implementation:** `google.adk.agents.LlmAgent` with three `FunctionTool`-wrapped functions
+**Implementation:** `google.adk.agents.LlmAgent` with twelve `FunctionTool`-wrapped functions
 
 **Agent Name:** `monitor_phase_agent`
 
@@ -1039,6 +1039,192 @@ Adjust printer temperature (nozzle or bed).
 
 ---
 
+#### `detect_print_completion(project_name: str, host: str = "", port: str = "", api_key: str = "") -> dict`
+Detect if a print job has completed.
+
+**Parameters:**
+- `project_name` (str): Name of the project being monitored
+- `host` (str): OctoPrint server hostname/IP (empty to use config default)
+- `port` (str): OctoPrint port as string (empty to use config default)
+- `api_key` (str): OctoPrint API key (empty to use config default)
+
+**Returns:** dict with keys:
+- `status` (str): "ok" or "error"
+- `completed` (bool): True if print has completed, False if still in progress
+- `state` (str or null): Current job state
+- `filename` (str or null): Name of the print file
+- `print_time_elapsed` (int): Total print time in seconds
+- `message` (str): Human-readable status message
+
+**Completion Criteria:**
+A print is considered completed when:
+- No active job (state is null), OR
+- Job completion percentage equals 100%
+
+**Example Response - Complete:**
+```json
+{
+  "status": "ok",
+  "completed": true,
+  "state": null,
+  "filename": "phone_stand.gcode",
+  "print_time_elapsed": 3600,
+  "message": "Print completion check: completed"
+}
+```
+
+**Example Response - In Progress:**
+```json
+{
+  "status": "ok",
+  "completed": false,
+  "state": "Printing",
+  "filename": "phone_stand.gcode",
+  "print_time_elapsed": 1800,
+  "message": "Print completion check: in progress"
+}
+```
+
+---
+
+#### `record_quality_assessment(project_name: str, overall_quality: str, issues_encountered: str = "", user_notes: str = "", photo_path: str = "") -> dict`
+Record user's print quality assessment after job completion.
+
+**Parameters:**
+- `project_name` (str): Name of the project being monitored
+- `overall_quality` (str): Overall quality rating - must be one of: "excellent", "good", "acceptable", "poor"
+- `issues_encountered` (str): Description of any issues observed (optional)
+- `user_notes` (str): User's additional notes about the print (optional)
+- `photo_path` (str): Path to a photo/inspection image (optional)
+
+**Returns:** dict with keys:
+- `status` (str): "ok" or "error"
+- `assessment_id` (str): Unique identifier for this assessment record
+- `message` (str): Human-readable status message
+
+**Validation:**
+- `overall_quality` must be one of the four valid options (returns error otherwise)
+
+**Example Response - Success:**
+```json
+{
+  "status": "ok",
+  "assessment_id": "qa_1707912345000",
+  "message": "Quality assessment recorded: excellent"
+}
+```
+
+**Example Response - Invalid Quality:**
+```json
+{
+  "status": "error",
+  "message": "overall_quality must be one of: excellent, good, acceptable, poor"
+}
+```
+
+**Persistence:** Assessment is stored to `{PROJECTS_DIR}/{project_name}/monitoring/quality_assessment.json`
+
+---
+
+#### `generate_print_summary(project_name: str) -> dict`
+Generate comprehensive print summary from all monitoring data collected during the print.
+
+**Parameters:**
+- `project_name` (str): Name of the project being monitored
+
+**Returns:** dict with keys:
+- `status` (str): "ok" or "error"
+- `summary` (dict): Comprehensive print summary (if status="ok")
+- `message` (str): Human-readable status message
+
+**Summary Structure:**
+```json
+{
+  "project_name": "phone_stand",
+  "generated_at": "2024-02-15T12:45:45Z",
+  "metrics": {
+    "total_snapshots": 10,
+    "total_print_time_s": 3600,
+    "avg_nozzle_temp_c": 209.5,
+    "max_nozzle_temp_c": 212.0,
+    "avg_bed_temp_c": 59.8,
+    "max_bed_temp_c": 60.0
+  },
+  "quality_assessment": {
+    "assessment_id": "qa_1707912345000",
+    "overall_quality": "good",
+    "issues_encountered": "Minor warping on corners",
+    "user_notes": "Good overall quality",
+    "photo_path": "/path/to/photo.jpg",
+    "timestamp": "2024-02-15T12:46:00Z"
+  },
+  "alerts_count": 2,
+  "interventions_count": 1,
+  "post_processing_recommendations": [
+    "Monitor nozzle temperature calibration",
+    "Standard finishing techniques sufficient"
+  ]
+}
+```
+
+**Post-Processing Recommendations** are automatically generated based on:
+- Overall quality assessment (poor quality triggers more recommendations)
+- Detected issues during printing (temperature, filament, bed adhesion, layer shift)
+- Print complexity and requirements
+
+**Persistence:** Summary is stored to `{PROJECTS_DIR}/{project_name}/monitoring/print_summary.json`
+
+---
+
+#### `archive_print_metadata(project_name: str) -> dict`
+Archive completed print metadata for historical analysis (for TICKET-021 print history/analytics).
+
+**Parameters:**
+- `project_name` (str): Name of the project being monitored
+
+**Returns:** dict with keys:
+- `status` (str): "ok" or "error"
+- `archive_id` (str): Unique identifier for this archive record
+- `archived_at` (str): ISO-8601 timestamp of archival
+- `message` (str): Human-readable status message
+
+**Prerequisites:**
+Must have called `generate_print_summary` first - this tool requires a print_summary.json file to exist.
+
+**Example Response - Success:**
+```json
+{
+  "status": "ok",
+  "archive_id": "archive_1707912345000",
+  "archived_at": "2024-02-15T12:47:00Z",
+  "message": "Print metadata archived: archive_1707912345000"
+}
+```
+
+**Example Response - No Summary:**
+```json
+{
+  "status": "error",
+  "message": "No print summary found - run generate_print_summary first"
+}
+```
+
+**Persistence:** Archives are stored to `{PROJECTS_DIR}/{project_name}/monitoring/archive.json` as a list of archive records.
+
+**Archive Record Structure:**
+```json
+{
+  "archive_id": "archive_1707912345000",
+  "archived_at": "2024-02-15T12:47:00Z",
+  "project_name": "phone_stand",
+  "summary": { ... } // Full print_summary.json content
+}
+```
+
+Multiple print completions can be archived for the same project, creating a complete print history.
+
+---
+
 **OctoPrintClient Class:**
 Internal class used by tool functions. Provides low-level OctoPrint API access.
 
@@ -1082,12 +1268,15 @@ Optional config variables (with defaults):
 ---
 
 **Output Structure:**
-Monitor phase outputs stored in `{PROJECTS_DIR}/{project_name}/print/`:
+Monitor phase outputs stored in `{PROJECTS_DIR}/{project_name}/monitoring/`:
 ```
-print/
-├── print_history.json       # Historical print records
-├── connection_log.json      # Connection test results
-└── metrics/                 # Real-time metrics (added by TICKET-017)
+monitoring/
+├── metrics.jsonl            # Time-series metric snapshots (TICKET-017)
+├── alerts.json              # Persisted formatted alerts (TICKET-018)
+├── interventions.json       # Log of user actions (pause/resume/cancel/temp adjust) (TICKET-019)
+├── quality_assessment.json  # User quality assessment after completion (TICKET-020)
+├── print_summary.json       # Comprehensive print summary with recommendations (TICKET-020)
+└── archive.json             # Historical archive of completed prints (TICKET-020)
 ```
 
 See: [../specs/MONITOR_AGENT_SPEC.md](../specs/MONITOR_AGENT_SPEC.md)
