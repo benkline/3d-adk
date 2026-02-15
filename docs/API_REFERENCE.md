@@ -1225,6 +1225,179 @@ Multiple print completions can be archived for the same project, creating a comp
 
 ---
 
+## Print History & Analytics (TICKET-021)
+
+Store and analyze print history across projects for success rate tracking and cost estimation.
+
+#### `store_print_history(project_name: str) -> dict`
+Store completed print data in global print history for cross-project analytics.
+
+**Parameters:**
+- `project_name` (str): Name of the project being stored
+
+**Returns:** dict with keys:
+- `status` (str): "ok" or "error"
+- `history_id` (str): Unique identifier for this history record
+- `message` (str): Human-readable status message
+
+**Prerequisites:**
+Must have called `generate_print_summary` and `record_quality_assessment` first.
+
+**Example Response - Success:**
+```json
+{
+  "status": "ok",
+  "history_id": "history_1707912345000",
+  "message": "Print history stored: history_1707912345000"
+}
+```
+
+**Persistence:** Records are stored to `{PROJECTS_DIR}/print_history.json` as a global list of history records.
+
+**History Record Structure:**
+```json
+{
+  "history_id": "history_1707912345000",
+  "recorded_at": "2024-02-15T12:47:00Z",
+  "project_name": "phone_stand",
+  "quality": "good",
+  "print_time_s": 3600,
+  "material_g": 8.0,
+  "material_cost_usd": 0.2,
+  "alerts_count": 1,
+  "interventions_count": 0
+}
+```
+
+---
+
+#### `query_print_history(project_name: str = "", start_date: str = "", end_date: str = "", quality_filter: str = "") -> dict`
+Query print history with optional filters for specific projects, date ranges, and quality levels.
+
+**Parameters:**
+- `project_name` (str, optional): Filter by exact project name
+- `start_date` (str, optional): Filter start date as "YYYY-MM-DD"
+- `end_date` (str, optional): Filter end date as "YYYY-MM-DD"
+- `quality_filter` (str, optional): Filter by quality level ("excellent", "good", "acceptable", "poor")
+
+**Returns:** dict with keys:
+- `status` (str): "ok" or "error"
+- `records` (list): Matching history records
+- `total_count` (int): Number of matching records
+- `message` (str): Human-readable status message
+
+**Example Response - Success:**
+```json
+{
+  "status": "ok",
+  "records": [
+    {
+      "history_id": "history_1",
+      "recorded_at": "2024-02-15T12:00:00Z",
+      "project_name": "phone_stand",
+      "quality": "good",
+      "print_time_s": 3600,
+      "material_g": 8.0,
+      "material_cost_usd": 0.2,
+      "alerts_count": 1,
+      "interventions_count": 0
+    }
+  ],
+  "total_count": 1,
+  "message": "Found 1 record(s)"
+}
+```
+
+**Filtering Examples:**
+- `query_print_history(project_name="phone_stand")` — Get all prints for a project
+- `query_print_history(start_date="2024-02-01", end_date="2024-02-15")` — Get prints in date range
+- `query_print_history(quality_filter="excellent")` — Get only excellent prints
+- `query_print_history(project_name="phone_stand", quality_filter="good")` — Combine filters
+
+---
+
+#### `get_print_analytics(project_name: str = "", days: int = 30) -> dict`
+Generate analytics and statistics from print history for success rate, material usage, and cost tracking.
+
+**Parameters:**
+- `project_name` (str, optional): Filter analytics by project name (empty = all projects)
+- `days` (int, optional): Number of past days to include (default: 30, use 0 for all time)
+
+**Returns:** dict with keys:
+- `status` (str): "ok" or "error"
+- `analytics` (dict): Aggregated statistics
+- `message` (str): Human-readable status message
+
+**Analytics Fields:**
+- `total_prints` (int): Total number of prints
+- `success_rate_pct` (float): Percentage of excellent + good prints (0-100)
+- `avg_print_time_s` (float): Average print time in seconds
+- `total_material_g` (float): Total material used in grams
+- `total_material_cost_usd` (float): Total material cost in USD
+- `avg_cost_per_print_usd` (float): Average cost per print
+- `quality_distribution` (dict): Count of prints by quality level
+
+**Example Response - Success:**
+```json
+{
+  "status": "ok",
+  "analytics": {
+    "total_prints": 10,
+    "success_rate_pct": 80.0,
+    "avg_print_time_s": 4320.0,
+    "total_material_g": 320.0,
+    "total_material_cost_usd": 8.0,
+    "avg_cost_per_print_usd": 0.8,
+    "quality_distribution": {
+      "excellent": 4,
+      "good": 4,
+      "acceptable": 1,
+      "poor": 1
+    }
+  },
+  "message": "Analytics generated from 10 print(s)"
+}
+```
+
+**Example Response - No History:**
+```json
+{
+  "status": "ok",
+  "analytics": {
+    "total_prints": 0,
+    "success_rate_pct": 0.0,
+    "avg_print_time_s": 0.0,
+    "total_material_g": 0.0,
+    "total_material_cost_usd": 0.0,
+    "avg_cost_per_print_usd": 0.0,
+    "quality_distribution": {}
+  },
+  "message": "No print history found for given filters"
+}
+```
+
+**Configuration:**
+Material usage estimation uses:
+- `FILAMENT_G_PER_HOUR` (default: 8.0) — Estimated filament usage rate
+- `FILAMENT_COST_PER_KG` (default: 25.0) — Cost per kilogram of filament in USD
+
+Configure via environment variables:
+```bash
+FILAMENT_G_PER_HOUR=8.0
+FILAMENT_COST_PER_KG=25.0
+```
+
+**Workflow:**
+1. After print completes, call `detect_print_completion`
+2. Call `record_quality_assessment` to capture user assessment
+3. Call `generate_print_summary` to aggregate monitoring data
+4. Call `archive_print_metadata` to save per-project archive
+5. Call `store_print_history` to add to global print history
+6. Use `query_print_history` to retrieve historical records
+7. Use `get_print_analytics` to analyze trends and costs
+
+---
+
 **OctoPrintClient Class:**
 Internal class used by tool functions. Provides low-level OctoPrint API access.
 
@@ -1270,13 +1443,16 @@ Optional config variables (with defaults):
 **Output Structure:**
 Monitor phase outputs stored in `{PROJECTS_DIR}/{project_name}/monitoring/`:
 ```
-monitoring/
-├── metrics.jsonl            # Time-series metric snapshots (TICKET-017)
-├── alerts.json              # Persisted formatted alerts (TICKET-018)
-├── interventions.json       # Log of user actions (pause/resume/cancel/temp adjust) (TICKET-019)
-├── quality_assessment.json  # User quality assessment after completion (TICKET-020)
-├── print_summary.json       # Comprehensive print summary with recommendations (TICKET-020)
-└── archive.json             # Historical archive of completed prints (TICKET-020)
+projects/
+├── print_history.json       # Global print history for cross-project analytics (TICKET-021)
+└── {project_name}/
+    └── monitoring/
+        ├── metrics.jsonl            # Time-series metric snapshots (TICKET-017)
+        ├── alerts.json              # Persisted formatted alerts (TICKET-018)
+        ├── interventions.json       # Log of user actions (pause/resume/cancel/temp adjust) (TICKET-019)
+        ├── quality_assessment.json  # User quality assessment after completion (TICKET-020)
+        ├── print_summary.json       # Comprehensive print summary with recommendations (TICKET-020)
+        └── archive.json             # Historical archive of completed prints (TICKET-020)
 ```
 
 See: [../specs/MONITOR_AGENT_SPEC.md](../specs/MONITOR_AGENT_SPEC.md)
