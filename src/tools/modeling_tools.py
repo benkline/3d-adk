@@ -76,48 +76,241 @@ def _load_design_specs(project_name: str, specs_path: Optional[str] = None) -> d
         return json.load(f)
 
 
-def _generate_basic_scad(project_name: str, design_specs: dict) -> str:
-    """Generate basic OpenSCAD code from design specifications.
+def _extract_scad_params(design_specs: dict) -> dict:
+    """Extract all SCAD-relevant parameters from design specifications.
 
-    Uses solidpython2 library to generate parametric OpenSCAD models.
+    Returns a flat dict with all parameters needed for code generation.
+    """
+    specs = design_specs.get("specifications", {})
+    dims = specs.get("overall_dimensions", {})
+    design_brief = design_specs.get("design_brief", {})
+
+    width = float(dims.get("width", 100))
+    height = float(dims.get("height", 80))
+    depth = float(dims.get("depth", 60))
+    wall_thickness = float(specs.get("wall_thickness_mm", 2))
+    material = specs.get("material", "PLA")
+    infill_percentage = float(specs.get("infill_percentage", 20))
+    print_orientation = specs.get("print_orientation", "flat")
+    tolerance = float(dims.get("tolerance_mm", 0.2)) if "tolerance_mm" in dims else 0.2
+    supports_required = specs.get("supports_required", False)
+
+    # Extract from design_brief if available
+    object_name = design_brief.get("name", "object")
+    aesthetics = design_brief.get("aesthetics", "functional")
+
+    # Extract parts (if available)
+    parts = design_specs.get("parts", [])
+    if not parts:
+        # Create a single default part
+        parts = [{
+            "name": "main_body",
+            "quantity": 1,
+            "dimensions": dims,
+            "tolerance_mm": tolerance
+        }]
+
+    return {
+        "width": width,
+        "height": height,
+        "depth": depth,
+        "wall_thickness": wall_thickness,
+        "material": material,
+        "infill_percentage": infill_percentage,
+        "print_orientation": print_orientation,
+        "tolerance": tolerance,
+        "supports_required": supports_required,
+        "object_name": object_name,
+        "aesthetics": aesthetics,
+        "parts": parts
+    }
+
+
+def _sanitize_scad_identifier(name: str) -> str:
+    """Convert a name into a valid OpenSCAD identifier."""
+    # Replace spaces and hyphens with underscores
+    name = name.replace(" ", "_").replace("-", "_")
+    # Keep only alphanumeric and underscores
+    name = "".join(c for c in name if c.isalnum() or c == "_")
+    # Ensure it doesn't start with a number
+    if name and name[0].isdigit():
+        name = "_" + name
+    return name.lower()
+
+
+def _render_scad_header(project_name: str, params: dict) -> str:
+    """Generate OpenSCAD file header with metadata."""
+    from datetime import datetime
+    timestamp = datetime.now().isoformat()
+
+    header = f"""// 3D-ADK Generated Model
+// Project: {project_name}
+// Generated: {timestamp}
+// Material: {params["material"]}
+// Object: {params["object_name"]}
+// Aesthetics: {params["aesthetics"]}
+
+"""
+    return header
+
+
+def _render_parameters_block(params: dict) -> str:
+    """Generate the PARAMETERS section with OpenSCAD variables."""
+    block = """// === PARAMETERS ===
+$fn = 100;  // Fragment resolution for smooth curves
+wall_thickness = {wall};
+tolerance = {tol};
+infill_percentage = {infill};
+
+""".format(
+        wall=params["wall_thickness"],
+        tol=params["tolerance"],
+        infill=params["infill_percentage"]
+    )
+    return block
+
+
+def _render_dimensions_block(params: dict) -> str:
+    """Generate the DIMENSIONS section with named dimension variables."""
+    block = """// === DIMENSIONS ===
+width = {width};
+height = {height};
+depth = {depth};
+
+""".format(
+        width=params["width"],
+        height=params["height"],
+        depth=params["depth"]
+    )
+    return block
+
+
+def _render_module_for_part(part: dict, params: dict) -> str:
+    """Generate an OpenSCAD module for a single part.
+
+    Creates a hollow box with walls using difference().
+    """
+    part_name = _sanitize_scad_identifier(part.get("name", "part"))
+    wall = params["wall_thickness"]
+
+    # Get part-specific dimensions if available
+    part_dims = part.get("dimensions", {})
+    part_width = float(part_dims.get("width", params["width"]))
+    part_height = float(part_dims.get("height", params["height"]))
+    part_depth = float(part_dims.get("depth", params["depth"]))
+
+    module_code = f"""module {part_name}(w={part_width}, h={part_height}, d={part_depth}, wall={wall}) {{
+  difference() {{
+    cube([w, h, d]);
+    translate([wall, wall, wall])
+      cube([w-2*wall, h-2*wall, d-wall]);
+  }}
+}}
+
+"""
+    return module_code
+
+
+def _render_assembly_block(parts: list, params: dict) -> str:
+    """Generate the ASSEMBLY section that instantiates all modules."""
+    block = "// === ASSEMBLY ===\n"
+
+    z_offset = 0
+    for i, part in enumerate(parts):
+        part_name = _sanitize_scad_identifier(part.get("name", "part"))
+        quantity = part.get("quantity", 1)
+
+        if quantity == 1:
+            # Single instance
+            if i == 0:
+                block += f"{part_name}();\n"
+            else:
+                block += f"translate([0, 0, {z_offset}]) {part_name}();\n"
+        else:
+            # Multiple instances stacked
+            for q in range(quantity):
+                offset = z_offset + (q * params["depth"])
+                block += f"translate([0, 0, {offset}]) {part_name}();\n"
+
+        z_offset += params["depth"]
+
+    return block + "\n"
+
+
+def _generate_comprehensive_scad(project_name: str, design_specs: dict) -> str:
+    """Generate comprehensive, well-structured OpenSCAD code from design specifications.
+
+    Produces code with clear sections: PARAMETERS, DIMENSIONS, MODULES, ASSEMBLY.
+    Returns the complete OpenSCAD code as a string.
+    """
+    try:
+        # Extract all parameters
+        params = _extract_scad_params(design_specs)
+
+        # Build the complete SCAD file
+        scad_code = (
+            _render_scad_header(project_name, params) +
+            _render_parameters_block(params) +
+            _render_dimensions_block(params) +
+            "// === MODULES ===\n"
+        )
+
+        # Add a module for each part
+        for part in params["parts"]:
+            scad_code += _render_module_for_part(part, params)
+
+        # Add assembly section
+        scad_code += _render_assembly_block(params["parts"], params)
+
+        return scad_code
+
+    except Exception as e:
+        logger.error(f"Error in _generate_comprehensive_scad: {str(e)}", exc_info=True)
+        raise
+
+
+def _save_part_scad_files(project_name: str, parts: list, params: dict) -> list:
+    """Save individual OpenSCAD files for each part in a multi-part design.
+
+    Returns a list of paths to the generated part files.
+    """
+    part_files = []
+
+    for part in parts:
+        part_name = _sanitize_scad_identifier(part.get("name", "part"))
+
+        # Create per-part SCAD code
+        scad_dir = _get_scad_dir(project_name)
+        part_file = scad_dir / f"{part_name}.scad"
+
+        # Generate header + parameters + dimensions + this part's module
+        part_code = (
+            _render_scad_header(f"{project_name}_{part_name}", params) +
+            _render_parameters_block(params) +
+            _render_dimensions_block(params) +
+            "// === MODULE ===\n" +
+            _render_module_for_part(part, params)
+        )
+
+        with open(part_file, "w") as f:
+            f.write(part_code)
+
+        part_files.append(str(part_file))
+
+    return part_files
+
+
+def _generate_basic_scad(project_name: str, design_specs: dict) -> str:
+    """Generate comprehensive OpenSCAD code from design specifications.
+
+    Attempts to use solidpython2 if available, falls back to string generation.
     Returns the OpenSCAD code as a string.
     """
     try:
-        from solid2 import cube, translate, difference, scad_render
-    except ImportError:
-        logger.warning("solidpython2 not available, using fallback SCAD generation")
-        return _generate_fallback_scad(project_name, design_specs)
-
-    try:
-        specs = design_specs.get("specifications", {})
-        dims = specs.get("overall_dimensions", {})
-        width = float(dims.get("width", 100))
-        height = float(dims.get("height", 80))
-        depth = float(dims.get("depth", 60))
-        wall_thickness = float(specs.get("wall_thickness_mm", 2))
-        material = specs.get("material", "PLA")
-
-        # Generate parametric box with walls
-        outer = cube([width, height, depth])
-        inner = translate([wall_thickness, wall_thickness, wall_thickness])(
-            cube([width - 2*wall_thickness, height - 2*wall_thickness, depth - wall_thickness])
-        )
-        box = difference()(outer, inner)
-
-        # Render to OpenSCAD code
-        scad_code = scad_render(box)
-
-        # Add header comments
-        header = f"""// Generated OpenSCAD model for {project_name}
-// Material: {material}
-// Overall dimensions: {width}mm x {height}mm x {depth}mm
-// Wall thickness: {wall_thickness}mm
-
-"""
-        return header + scad_code
-
+        # Try comprehensive generation first
+        return _generate_comprehensive_scad(project_name, design_specs)
     except Exception as e:
-        logger.error(f"Error generating SCAD with solidpython2: {str(e)}", exc_info=True)
+        logger.warning(f"Comprehensive SCAD generation failed: {str(e)}, using fallback")
         return _generate_fallback_scad(project_name, design_specs)
 
 
@@ -291,6 +484,7 @@ async def generate_scad_code(project_name: str, design_specs: dict) -> dict:
         - status: "ok" or "error"
         - scad_path: str (path to generated .scad file)
         - scad_content: str (the OpenSCAD code generated)
+        - part_files: list[str] (if multi-part design)
         - message: str
     """
     logger.info(f"generate_scad_code called: project={project_name}")
@@ -321,25 +515,38 @@ async def generate_scad_code(project_name: str, design_specs: dict) -> dict:
         with open(scad_path, "w") as f:
             f.write(scad_code)
 
+        # Check if multi-part design
+        parts = design_specs.get("parts", [])
+        part_files = []
+        if parts and len(parts) > 1:
+            # Save individual part files
+            params = _extract_scad_params(design_specs)
+            part_files = _save_part_scad_files(project_name, parts, params)
+
         # Update metadata
         metadata = _load_modeling_metadata(project_name)
         model_record = {
-            "id": str(uuid.uuid4()),
+            "id": f"model_{uuid.uuid4().hex[:8]}",
             "filename": "model.scad",
             "path": str(scad_path),
             "created_at": datetime.now().isoformat(),
-            "status": "generated"
+            "status": "generated",
+            "part_count": len(parts) if parts else 1,
+            "part_files": part_files
         }
         metadata["scad_models"].append(model_record)
         _save_modeling_metadata(project_name, metadata)
 
         logger.info(f"generate_scad_code: SCAD generated and saved to {scad_path}")
-        return {
+        result = {
             "status": "ok",
             "scad_path": str(scad_path),
             "scad_content": scad_code,
             "message": f"OpenSCAD code generated successfully for {project_name}"
         }
+        if part_files:
+            result["part_files"] = part_files
+        return result
 
     except Exception as e:
         logger.error(f"generate_scad_code: error for {project_name}: {str(e)}", exc_info=True)

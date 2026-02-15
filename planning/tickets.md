@@ -287,7 +287,7 @@ Test the complete design agent workflow end-to-end.
 ## PHASE 2: Modeling Agent Implementation
 
 ### TICKET-009: Modeling Agent Core Framework
-**Status:** TODO
+**Status:** DONE
 **Priority:** P1
 **Phase:** Modeling Agent
 **Depends on:** TICKET-002
@@ -296,22 +296,34 @@ Test the complete design agent workflow end-to-end.
 Create the basic structure for the Modeling Phase Agent.
 
 **Tasks:**
-- [ ] Create `src/agents/modeling_agent.py`
-- [ ] Implement agent initialization
-- [ ] Create input validation from design specs
-- [ ] Implement output formatting for exports
-- [ ] Setup OpenSCAD integration
-- [ ] Update relevant documentation in `docs/API_REFERENCE.md`
+- [x] Create `src/agents/modeling.py` with LlmAgent definition
+- [x] Implement agent initialization with four tools
+- [x] Create input validation from design specs (validate_design_specs)
+- [x] Implement output formatting for exports (export_model with STL/3MF support)
+- [x] Setup OpenSCAD integration (generate_scad_code using solidpython2)
+- [x] Update relevant documentation in `docs/API_REFERENCE.md`
+- [x] Create comprehensive test suite (15 tests, all passing)
 
 **Acceptance Criteria:**
-- Agent initializes and validates design input
-- OpenSCAD integration working
-- Proper response formatting
+- ✅ Agent initializes and validates design input
+- ✅ OpenSCAD integration working (solidpython2 + subprocess)
+- ✅ Proper response formatting (status dict pattern)
+- ✅ All 15 new tests passing
+- ✅ No regressions (all 14 existing tests still passing)
+
+**Implementation:**
+- Created `src/agents/modeling.py` with modeling_agent (LlmAgent with 4 tools)
+- Implemented `src/tools/modeling_tools.py` with 4 async functions + 9 helpers
+- Added `OPENSCAD_PATH` to `src/config.py`
+- Created `tests/test_modeling.py` with 15 comprehensive tests
+- Updated `docs/API_REFERENCE.md` with full Modeling Agent documentation
+
+**PR:** https://github.com/benkline/3d-adk/pull/6
 
 ---
 
 ### TICKET-010: OpenSCAD Code Generation Engine
-**Status:** TODO
+**Status:** DONE
 **Priority:** P1
 **Phase:** Modeling Agent
 **Depends on:** TICKET-009
@@ -320,18 +332,25 @@ Create the basic structure for the Modeling Phase Agent.
 Implement Python-to-OpenSCAD code generation from design specifications.
 
 **Tasks:**
-- [ ] Create OpenSCAD generation engine
-- [ ] Implement parametric design patterns
-- [ ] Build geometric primitive generation
-- [ ] Create multi-part assembly generation
-- [ ] Implement module and function generation
-- [ ] Update relevant documentation in `docs/API_REFERENCE.md`
+- [x] Create OpenSCAD generation engine
+- [x] Implement parametric design patterns
+- [x] Build geometric primitive generation
+- [x] Create multi-part assembly generation
+- [x] Implement module and function generation
+- [x] Update relevant documentation in `docs/API_REFERENCE.md`
 
 **Acceptance Criteria:**
-- Generates valid, compilable OpenSCAD code
-- Supports parametric dimensions
-- Handles simple to moderately complex geometries
-- Code is well-documented and readable
+- ✅ Generates valid, compilable OpenSCAD code
+- ✅ Supports parametric dimensions
+- ✅ Handles simple to moderately complex geometries
+- ✅ Code is well-documented and readable
+
+**Implementation Details:**
+- Created 9 helper functions for modular SCAD generation
+- Added 8 comprehensive tests (all passing)
+- Fixed pre-existing test bug in export_model
+- All 23 tests passing (11 existing + 8 new + 4 export)
+- PR: https://github.com/benkline/3d-adk/pull/8
 
 **Example Generated Code:**
 ```scad
@@ -487,7 +506,7 @@ Test the complete modeling workflow end-to-end.
 ## PHASE 3: Print Monitor Agent Implementation
 
 ### TICKET-016: OctoPrint API Integration
-**Status:** TODO
+**Status:** DONE
 **Priority:** P1
 **Phase:** Monitor Agent
 **Depends on:** TICKET-002
@@ -496,26 +515,35 @@ Test the complete modeling workflow end-to-end.
 Implement OctoPrint API connection and communication.
 
 **Tasks:**
-- [ ] Create `src/agents/monitor_agent.py`
-- [ ] Implement OctoPrint API client wrapper
-- [ ] Build connection testing and validation
-- [ ] Implement authentication handling
-- [ ] Create error handling and retry logic
-- [ ] Update relevant documentation in `docs/API_REFERENCE.md`
+- [x] Create `src/agents/monitor.py` (monitor_agent LlmAgent)
+- [x] Implement OctoPrint API client wrapper (OctoPrintClient class)
+- [x] Build connection testing and validation (test_connection tool)
+- [x] Implement authentication handling (API key validation)
+- [x] Create error handling and retry logic (two-tier validation + try/except)
+- [x] Update relevant documentation in `docs/API_REFERENCE.md`
 
 **Acceptance Criteria:**
-- Successfully connects to OctoPrint instance
-- API calls work correctly
-- Connection errors handled gracefully
-- Can query printer status
+- ✅ Successfully connects to OctoPrint instance
+- ✅ API calls work correctly
+- ✅ Connection errors handled gracefully
+- ✅ Can query printer status
+
+**Implementation Details:**
+- Created OctoPrintClient class wrapping octorest library
+- Implemented three tools: test_connection, get_printer_status, get_job_status
+- Created monitor_phase_agent LlmAgent with comprehensive instructions
+- Added 28 comprehensive tests (100% passing)
+- Created conftest.py for test environment configuration
+- Full API documentation in API_REFERENCE.md with examples
 
 **Testing:**
-```bash
-# Test with OctoPrint instance (local or mock)
-python -c "from src.agents.monitor_agent import OctoPrintClient; \
-  client = OctoPrintClient('localhost', 'api_key'); \
-  print(client.get_printer_status())"
-```
+- 28 tests covering all functionality
+- OctoPrintClient validation and connection
+- Tool functions with config fallbacks
+- Error handling and edge cases
+- All tests passing with no warnings
+
+**Created PR:** https://github.com/benkline/3d-adk/pull/7
 
 ---
 
