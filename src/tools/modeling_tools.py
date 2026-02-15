@@ -117,6 +117,166 @@ def _load_design_specs(project_name: str, specs_path: Optional[str] = None) -> d
         return json.load(f)
 
 
+# Material-specific minimum wall thickness constants
+_WALL_THICKNESS_MINIMUMS = {
+    "PLA": 1.2,
+    "PETG": 1.5,
+    "ABS": 1.5,
+    "TPU": 0.8,
+    "Resin": 0.5,
+    "Nylon": 1.5,
+}
+_DEFAULT_WALL_MIN = 1.2  # mm
+
+
+def _analyze_wall_thickness(specs: dict) -> tuple[bool, list]:
+    """Check wall thickness against material minimums.
+
+    Args:
+        specs: Design specifications dict
+
+    Returns:
+        Tuple of (ok: bool, warnings: list[str])
+    """
+    wall_thickness = specs.get("specifications", {}).get("wall_thickness_mm", _DEFAULT_WALL_MIN)
+    material = specs.get("specifications", {}).get("material", "PLA")
+
+    min_thickness = _WALL_THICKNESS_MINIMUMS.get(material, _DEFAULT_WALL_MIN)
+    warnings = []
+
+    if wall_thickness < min_thickness:
+        ok = False
+        warnings.append(
+            f"Wall thickness {wall_thickness}mm is below minimum {min_thickness}mm for {material}"
+        )
+    else:
+        ok = True
+
+    return ok, warnings
+
+
+def _analyze_overhangs(specs: dict) -> tuple[bool, list, list]:
+    """Detect potential overhang issues.
+
+    Args:
+        specs: Design specifications dict
+
+    Returns:
+        Tuple of (overhang_ok: bool, warnings: list[str], suggestions: list[str])
+    """
+    specs_data = specs.get("specifications", {})
+    supports_required = specs_data.get("supports_required", False)
+    print_orientation = specs_data.get("print_orientation", "flat")
+    dims = specs_data.get("overall_dimensions", {})
+
+    warnings = []
+    suggestions = []
+
+    # Check if supports are explicitly required
+    if supports_required:
+        overhang_ok = False
+        warnings.append("Model requires support structures")
+        suggestions.append("Use tree supports for better surface quality and reduced material waste")
+        suggestions.append(f"Consider rotating orientation from '{print_orientation}' for reduced supports")
+    else:
+        # Check for potential overhangs based on dimensions
+        width = float(dims.get("width", 100))
+        height = float(dims.get("height", 80))
+        depth = float(dims.get("depth", 60))
+
+        # If height is significantly larger than width, there may be overhangs
+        max_horizontal = max(width, depth)
+        if height > max_horizontal * 2:
+            overhang_ok = False
+            warnings.append(f"Height ({height}mm) is significantly larger than horizontal dimensions ({max_horizontal}mm), potential overhangs detected")
+            suggestions.append(f"Consider different print orientation or adding bracing")
+        else:
+            overhang_ok = True
+
+    return overhang_ok, warnings, suggestions
+
+
+def _analyze_hollow_sections(specs: dict) -> list:
+    """Check infill and structure for hollow section concerns.
+
+    Args:
+        specs: Design specifications dict
+
+    Returns:
+        List of warning strings
+    """
+    specs_data = specs.get("specifications", {})
+    infill = specs_data.get("infill_percentage", 20)
+    constraints = specs.get("design_brief", {}).get("constraints", [])
+
+    warnings = []
+
+    if infill < 10:
+        warnings.append(
+            f"Very low infill ({infill}%) may cause structural weakness and layer separation"
+        )
+    elif infill < 20:
+        # Check if structural strength is mentioned in constraints
+        constraint_str = " ".join(constraints).lower()
+        if any(word in constraint_str for word in ["structural", "load", "strength", "support"]):
+            warnings.append(
+                f"Low infill ({infill}%) with structural requirements; consider increasing to 20%+"
+            )
+
+    return warnings
+
+
+def _build_printability_report(specs: dict) -> dict:
+    """Assemble complete printability report from spec analysis.
+
+    Args:
+        specs: Design specifications dict
+
+    Returns:
+        Printability report dict
+    """
+    # Analyze each aspect
+    wall_ok, wall_warnings = _analyze_wall_thickness(specs)
+    overhang_ok, overhang_warnings, overhang_suggestions = _analyze_overhangs(specs)
+    hollow_warnings = _analyze_hollow_sections(specs)
+
+    # Check multi-part assembly tolerances
+    parts = specs.get("parts", [])
+    assemblies_ok = True
+    if len(parts) > 1:
+        for part in parts:
+            tolerance = part.get("tolerance_mm", 0.2)
+            if tolerance < 0.1:
+                assemblies_ok = False
+                break
+
+    # Combine all warnings and suggestions
+    all_warnings = wall_warnings + overhang_warnings + hollow_warnings
+    all_suggestions = overhang_suggestions
+
+    # Feasibility: primarily based on wall thickness (most critical)
+    feasible = wall_ok and (len(all_warnings) == 0 or not wall_ok)  # Always show warnings but feasible if wall is ok
+    feasible = wall_ok  # Actually: it's feasible if walls are ok, even with warnings
+
+    # Get estimates from specs
+    specs_data = specs.get("specifications", {})
+    print_hours = float(specs_data.get("estimated_print_time_hours", 0))
+    weight_g = float(specs_data.get("estimated_weight_g", 0))
+
+    return {
+        "feasible": feasible,
+        "wall_thickness_ok": wall_ok,
+        "overhang_ok": overhang_ok,
+        "assemblies_ok": assemblies_ok,
+        "warnings": all_warnings,
+        "suggestions": all_suggestions,
+        "estimates": {
+            "print_hours": print_hours,
+            "weight_g": weight_g,
+        }
+    }
+
+
 def _extract_scad_params(design_specs: dict) -> dict:
     """Extract all SCAD-relevant parameters from design specifications.
 
@@ -959,4 +1119,74 @@ async def render_preview(
         return {
             "status": "error",
             "message": f"Failed to render previews: {str(e)}"
+        }
+
+
+async def analyze_printability(project_name: str, specs_path: Optional[str] = None) -> dict:
+    """Analyze design specifications for 3D printability.
+
+    Args:
+        project_name: Name of the project (non-empty string)
+        specs_path: Optional path to design_specs.json (defaults to design/design_specs.json)
+
+    Returns:
+        dict with keys:
+        - status: "ok" or "error"
+        - report: dict (if status is "ok") with printability analysis
+        - message: str
+    """
+    logger.info(f"analyze_printability called: project={project_name}")
+
+    # Validate inputs
+    if not isinstance(project_name, str) or not project_name.strip():
+        logger.warning("analyze_printability: empty project_name")
+        return {
+            "status": "error",
+            "message": "project_name must be a non-empty string"
+        }
+
+    try:
+        # Load design specs
+        design_specs = _load_design_specs(project_name, specs_path)
+
+        # Build printability report
+        report = _build_printability_report(design_specs)
+
+        # Update metadata
+        metadata = _load_modeling_metadata(project_name)
+        analysis_record = {
+            "id": f"analysis_{uuid.uuid4().hex[:8]}",
+            "created_at": datetime.now().isoformat(),
+            "status": "analyzed",
+            "report": report
+        }
+        if "printability_reports" not in metadata:
+            metadata["printability_reports"] = []
+        metadata["printability_reports"].append(analysis_record)
+        _save_modeling_metadata(project_name, metadata)
+
+        logger.info(f"analyze_printability: analysis complete for {project_name}")
+        return {
+            "status": "ok",
+            "report": report,
+            "message": f"Printability analysis complete for {project_name}"
+        }
+
+    except FileNotFoundError as e:
+        logger.error(f"analyze_printability: file not found: {str(e)}")
+        return {
+            "status": "error",
+            "message": f"Design specs file not found: {str(e)}"
+        }
+    except json.JSONDecodeError as e:
+        logger.error(f"analyze_printability: invalid JSON: {str(e)}")
+        return {
+            "status": "error",
+            "message": f"Design specs file contains invalid JSON: {str(e)}"
+        }
+    except Exception as e:
+        logger.error(f"analyze_printability: error for {project_name}: {str(e)}", exc_info=True)
+        return {
+            "status": "error",
+            "message": f"Failed to analyze printability: {str(e)}"
         }

@@ -494,6 +494,77 @@ Multi-part success, updates `{project}/modeling/metadata.json` with:
 
 ---
 
+#### `analyze_printability(project_name: str, specs_path: Optional[str] = None) -> dict`
+Analyze design specifications for 3D printability and generate warnings and recommendations.
+
+**Parameters:**
+- `project_name` (str): Name of the project (non-empty)
+- `specs_path` (str, optional): Path to design_specs.json (defaults to `{project}/design/design_specs.json`)
+
+**Returns:** dict with keys:
+- `status` (str): "ok" or "error"
+- `report` (dict): Printability report (if status is "ok") with keys:
+  - `feasible` (bool): Whether model is printable
+  - `wall_thickness_ok` (bool): Wall thickness meets material minimum
+  - `overhang_ok` (bool): No unsupported overhangs detected
+  - `assemblies_ok` (bool): Multi-part tolerances acceptable
+  - `warnings` (list[str]): Printability warnings
+  - `suggestions` (list[str]): Recommendations
+  - `estimates` (dict): `print_hours` (float) and `weight_g` (float)
+- `message` (str): Success or error message
+
+**Analysis Checks:**
+
+**Wall Thickness Validation:**
+- Compares `specifications.wall_thickness_mm` against material-specific minimums
+- Material thresholds: PLA 1.2mm, PETG 1.5mm, ABS 1.5mm, TPU 0.8mm, Resin 0.5mm, Nylon 1.5mm
+- Returns warning if thickness is below minimum for selected material
+- Primary gate for feasibility
+
+**Overhang Detection:**
+- Checks `specifications.supports_required` flag
+- Analyzes dimension ratios using `overall_dimensions`
+- Flags designs with height > 2x horizontal dimensions as potential overhangs
+- Suggests appropriate support strategy (tree supports recommended)
+
+**Hollow Section Analysis:**
+- Evaluates `infill_percentage` for structural adequacy
+- Flags extremely low infill (< 10%) as structural weakness risk
+- For load-bearing parts (identified in constraints), suggests minimum 20% infill
+
+**Assembly Tolerance Check:**
+- Validates multi-part designs have adequate tolerances (>= 0.1mm)
+- Sets `assemblies_ok: false` for parts with poor tolerance
+
+**Error Cases (return status "error"):**
+- Empty `project_name`
+- Design specs file not found
+- Invalid or corrupted JSON in design specs
+- Other I/O or JSON parsing errors
+
+**Metadata Update:**
+On successful analysis, updates `{project}/modeling/metadata.json` with:
+```json
+{
+  "id": "analysis_xxxxxxxx",
+  "created_at": "ISO timestamp",
+  "status": "analyzed",
+  "report": {
+    "feasible": true,
+    "wall_thickness_ok": true,
+    "overhang_ok": false,
+    "assemblies_ok": true,
+    "warnings": ["Model requires support structures"],
+    "suggestions": ["Use tree supports for better surface quality"],
+    "estimates": {"print_hours": 2.5, "weight_g": 45.0}
+  }
+}
+```
+
+**Error Handling:** Returns error dict with message rather than raising exceptions
+
+---
+
 **Output Structure:**
 All modeling phase outputs stored in `{PROJECTS_DIR}/{project_name}/modeling/`:
 ```

@@ -23,11 +23,11 @@ class TestModelingAgent:
         from src.agents.modeling import modeling_agent
         assert modeling_agent.name == "modeling_phase_agent"
 
-    def test_modeling_agent_has_five_tools(self):
-        """Test that modeling agent has five tools."""
+    def test_modeling_agent_has_six_tools(self):
+        """Test that modeling agent has six tools."""
         os.environ["ANTHROPIC_API_KEY"] = "test_key"
         from src.agents.modeling import modeling_agent
-        assert len(modeling_agent.tools) == 5
+        assert len(modeling_agent.tools) == 6
 
     def test_modeling_agent_uses_config_model(self):
         """Test that modeling agent uses configured LLM model."""
@@ -692,3 +692,208 @@ class TestRenderPreview:
             finally:
                 modeling_tools.PROJECTS_DIR = original_projects_dir
                 modeling_tools.OPENSCAD_PATH = original_openscad_path
+
+
+class TestAnalyzePrintability:
+    """Tests for analyze_printability tool."""
+
+    @pytest.mark.asyncio
+    async def test_analyze_printability_with_valid_input(self):
+        """Test analyze_printability returns formatted response with valid input."""
+        os.environ["ANTHROPIC_API_KEY"] = "test_key"
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Monkeypatch the PROJECTS_DIR in the module
+            import src.tools.modeling_tools as modeling_tools
+            original_dir = modeling_tools.PROJECTS_DIR
+            modeling_tools.PROJECTS_DIR = tmpdir
+
+            try:
+                # Create modeling directory
+                modeling_dir = Path(tmpdir) / "test_project" / "modeling"
+                modeling_dir.mkdir(parents=True, exist_ok=True)
+
+                # Create design specs
+                project_dir = Path(tmpdir) / "test_project" / "design"
+                project_dir.mkdir(parents=True, exist_ok=True)
+
+                specs = {
+                    "project_name": "test_project",
+                    "specifications": {
+                        "overall_dimensions": {"width": 100, "height": 80, "depth": 60},
+                        "material": "PLA",
+                        "wall_thickness_mm": 2.0,
+                        "infill_percentage": 20,
+                        "print_orientation": "flat",
+                        "supports_required": False,
+                        "estimated_print_time_hours": 2.5,
+                        "estimated_weight_g": 45.0,
+                    },
+                    "design_brief": {"name": "test", "constraints": []},
+                    "parts": [{"name": "body", "quantity": 1, "tolerance_mm": 0.2}]
+                }
+
+                specs_path = project_dir / "design_specs.json"
+                with open(specs_path, "w") as f:
+                    json.dump(specs, f)
+
+                from src.tools.modeling_tools import analyze_printability
+                result = await analyze_printability("test_project", specs_path=str(specs_path))
+
+                assert isinstance(result, dict)
+                assert "status" in result
+                assert result["status"] == "ok"
+                assert "report" in result
+                assert "message" in result
+
+                # Verify report structure
+                report = result["report"]
+                assert "feasible" in report
+                assert "wall_thickness_ok" in report
+                assert "overhang_ok" in report
+                assert "assemblies_ok" in report
+                assert "warnings" in report
+                assert "suggestions" in report
+                assert "estimates" in report
+                assert isinstance(report["warnings"], list)
+                assert isinstance(report["suggestions"], list)
+                assert "print_hours" in report["estimates"]
+                assert "weight_g" in report["estimates"]
+            finally:
+                modeling_tools.PROJECTS_DIR = original_dir
+
+    @pytest.mark.asyncio
+    async def test_analyze_printability_with_empty_project_name(self):
+        """Test analyze_printability returns error with empty project_name."""
+        os.environ["ANTHROPIC_API_KEY"] = "test_key"
+
+        from src.tools.modeling_tools import analyze_printability
+        result = await analyze_printability("")
+
+        assert result["status"] == "error"
+        assert "message" in result
+
+    @pytest.mark.asyncio
+    async def test_analyze_printability_wall_thickness_violation(self):
+        """Test analyze_printability detects thin walls."""
+        os.environ["ANTHROPIC_API_KEY"] = "test_key"
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            import src.tools.modeling_tools as modeling_tools
+            original_dir = modeling_tools.PROJECTS_DIR
+            modeling_tools.PROJECTS_DIR = tmpdir
+
+            try:
+                # Create directories
+                modeling_dir = Path(tmpdir) / "test_project" / "modeling"
+                modeling_dir.mkdir(parents=True, exist_ok=True)
+
+                project_dir = Path(tmpdir) / "test_project" / "design"
+                project_dir.mkdir(parents=True, exist_ok=True)
+
+                # Create specs with very thin walls
+                specs = {
+                    "project_name": "test_project",
+                    "specifications": {
+                        "overall_dimensions": {"width": 100, "height": 80, "depth": 60},
+                        "material": "PLA",
+                        "wall_thickness_mm": 0.5,  # Below PLA minimum of 1.2mm
+                        "infill_percentage": 20,
+                        "print_orientation": "flat",
+                        "supports_required": False,
+                        "estimated_print_time_hours": 2.5,
+                        "estimated_weight_g": 45.0,
+                    },
+                    "design_brief": {"name": "test", "constraints": []},
+                    "parts": []
+                }
+
+                specs_path = project_dir / "design_specs.json"
+                with open(specs_path, "w") as f:
+                    json.dump(specs, f)
+
+                from src.tools.modeling_tools import analyze_printability
+                result = await analyze_printability("test_project", specs_path=str(specs_path))
+
+                assert result["status"] == "ok"
+                report = result["report"]
+                assert report["wall_thickness_ok"] is False
+                assert len(report["warnings"]) > 0
+                assert any("wall thickness" in w.lower() for w in report["warnings"])
+            finally:
+                modeling_tools.PROJECTS_DIR = original_dir
+
+    @pytest.mark.asyncio
+    async def test_analyze_printability_overhang_detection(self):
+        """Test analyze_printability detects support requirements."""
+        os.environ["ANTHROPIC_API_KEY"] = "test_key"
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            import src.tools.modeling_tools as modeling_tools
+            original_dir = modeling_tools.PROJECTS_DIR
+            modeling_tools.PROJECTS_DIR = tmpdir
+
+            try:
+                # Create directories
+                modeling_dir = Path(tmpdir) / "test_project" / "modeling"
+                modeling_dir.mkdir(parents=True, exist_ok=True)
+
+                project_dir = Path(tmpdir) / "test_project" / "design"
+                project_dir.mkdir(parents=True, exist_ok=True)
+
+                # Create specs with supports required
+                specs = {
+                    "project_name": "test_project",
+                    "specifications": {
+                        "overall_dimensions": {"width": 100, "height": 80, "depth": 60},
+                        "material": "PLA",
+                        "wall_thickness_mm": 2.0,
+                        "infill_percentage": 20,
+                        "print_orientation": "flat",
+                        "supports_required": True,
+                        "estimated_print_time_hours": 3.5,
+                        "estimated_weight_g": 55.0,
+                    },
+                    "design_brief": {"name": "test", "constraints": []},
+                    "parts": []
+                }
+
+                specs_path = project_dir / "design_specs.json"
+                with open(specs_path, "w") as f:
+                    json.dump(specs, f)
+
+                from src.tools.modeling_tools import analyze_printability
+                result = await analyze_printability("test_project", specs_path=str(specs_path))
+
+                assert result["status"] == "ok"
+                report = result["report"]
+                assert report["overhang_ok"] is False
+                assert len(report["warnings"]) > 0
+                assert len(report["suggestions"]) > 0
+                assert any("support" in w.lower() for w in report["warnings"])
+                assert any("tree" in s.lower() for s in report["suggestions"])
+            finally:
+                modeling_tools.PROJECTS_DIR = original_dir
+
+    @pytest.mark.asyncio
+    async def test_analyze_printability_missing_specs_file(self):
+        """Test analyze_printability returns error when specs file missing."""
+        os.environ["ANTHROPIC_API_KEY"] = "test_key"
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            import src.tools.modeling_tools as modeling_tools
+            original_dir = modeling_tools.PROJECTS_DIR
+            modeling_tools.PROJECTS_DIR = tmpdir
+
+            try:
+                # Create modeling directory but no design specs
+                modeling_dir = Path(tmpdir) / "test_project" / "modeling"
+                modeling_dir.mkdir(parents=True, exist_ok=True)
+
+                from src.tools.modeling_tools import analyze_printability
+                result = await analyze_printability("test_project")
+
+                assert result["status"] == "error"
+                assert "message" in result
+            finally:
+                modeling_tools.PROJECTS_DIR = original_dir
