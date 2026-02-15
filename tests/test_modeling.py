@@ -203,6 +203,271 @@ class TestGenerateSCADCode:
             assert "message" in result
 
 
+class TestOpenSCADCodeGeneration:
+    """Tests for the enhanced OpenSCAD code generation engine."""
+
+    @pytest.mark.asyncio
+    async def test_scad_contains_parameters_section(self):
+        """Test that generated SCAD contains the PARAMETERS section."""
+        os.environ["ANTHROPIC_API_KEY"] = "test_key"
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            import src.tools.modeling_tools as modeling_tools
+            original_dir = modeling_tools.PROJECTS_DIR
+            modeling_tools.PROJECTS_DIR = tmpdir
+
+            try:
+                modeling_dir = Path(tmpdir) / "test_project" / "modeling"
+                modeling_dir.mkdir(parents=True, exist_ok=True)
+
+                design_specs = {
+                    "project_name": "test_project",
+                    "specifications": {
+                        "overall_dimensions": {"width": 100, "height": 80, "depth": 60},
+                        "material": "PLA",
+                        "wall_thickness_mm": 2
+                    },
+                    "design_brief": {"name": "test"}
+                }
+
+                from src.tools.modeling_tools import generate_scad_code
+                result = await generate_scad_code("test_project", design_specs)
+
+                assert result["status"] == "ok"
+                assert "// === PARAMETERS ===" in result["scad_content"]
+            finally:
+                modeling_tools.PROJECTS_DIR = original_dir
+
+    @pytest.mark.asyncio
+    async def test_scad_contains_dimensions_section(self):
+        """Test that generated SCAD contains the DIMENSIONS section."""
+        os.environ["ANTHROPIC_API_KEY"] = "test_key"
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            import src.tools.modeling_tools as modeling_tools
+            original_dir = modeling_tools.PROJECTS_DIR
+            modeling_tools.PROJECTS_DIR = tmpdir
+
+            try:
+                modeling_dir = Path(tmpdir) / "test_project" / "modeling"
+                modeling_dir.mkdir(parents=True, exist_ok=True)
+
+                design_specs = {
+                    "project_name": "test_project",
+                    "specifications": {
+                        "overall_dimensions": {"width": 100, "height": 80, "depth": 60},
+                        "material": "PLA"
+                    },
+                    "design_brief": {"name": "test"}
+                }
+
+                from src.tools.modeling_tools import generate_scad_code
+                result = await generate_scad_code("test_project", design_specs)
+
+                assert result["status"] == "ok"
+                assert "// === DIMENSIONS ===" in result["scad_content"]
+            finally:
+                modeling_tools.PROJECTS_DIR = original_dir
+
+    @pytest.mark.asyncio
+    async def test_scad_contains_fn_parameter(self):
+        """Test that generated SCAD contains the $fn parameter."""
+        os.environ["ANTHROPIC_API_KEY"] = "test_key"
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            import src.tools.modeling_tools as modeling_tools
+            original_dir = modeling_tools.PROJECTS_DIR
+            modeling_tools.PROJECTS_DIR = tmpdir
+
+            try:
+                modeling_dir = Path(tmpdir) / "test_project" / "modeling"
+                modeling_dir.mkdir(parents=True, exist_ok=True)
+
+                design_specs = {
+                    "project_name": "test_project",
+                    "specifications": {
+                        "overall_dimensions": {"width": 100, "height": 80, "depth": 60},
+                        "material": "PLA"
+                    },
+                    "design_brief": {"name": "test"}
+                }
+
+                from src.tools.modeling_tools import generate_scad_code
+                result = await generate_scad_code("test_project", design_specs)
+
+                assert result["status"] == "ok"
+                assert "$fn" in result["scad_content"]
+            finally:
+                modeling_tools.PROJECTS_DIR = original_dir
+
+    @pytest.mark.asyncio
+    async def test_scad_uses_named_dimension_variables(self):
+        """Test that generated SCAD uses named dimension variables."""
+        os.environ["ANTHROPIC_API_KEY"] = "test_key"
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            import src.tools.modeling_tools as modeling_tools
+            original_dir = modeling_tools.PROJECTS_DIR
+            modeling_tools.PROJECTS_DIR = tmpdir
+
+            try:
+                modeling_dir = Path(tmpdir) / "test_project" / "modeling"
+                modeling_dir.mkdir(parents=True, exist_ok=True)
+
+                design_specs = {
+                    "project_name": "test_project",
+                    "specifications": {
+                        "overall_dimensions": {"width": 100, "height": 80, "depth": 60},
+                        "material": "PLA"
+                    },
+                    "design_brief": {"name": "test"}
+                }
+
+                from src.tools.modeling_tools import generate_scad_code
+                result = await generate_scad_code("test_project", design_specs)
+
+                assert result["status"] == "ok"
+                scad = result["scad_content"]
+                assert "width =" in scad
+                assert "height =" in scad
+                assert "depth =" in scad
+            finally:
+                modeling_tools.PROJECTS_DIR = original_dir
+
+    @pytest.mark.asyncio
+    async def test_scad_contains_module_definition(self):
+        """Test that generated SCAD contains module definition."""
+        os.environ["ANTHROPIC_API_KEY"] = "test_key"
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            import src.tools.modeling_tools as modeling_tools
+            original_dir = modeling_tools.PROJECTS_DIR
+            modeling_tools.PROJECTS_DIR = tmpdir
+
+            try:
+                modeling_dir = Path(tmpdir) / "test_project" / "modeling"
+                modeling_dir.mkdir(parents=True, exist_ok=True)
+
+                design_specs = {
+                    "project_name": "test_project",
+                    "specifications": {
+                        "overall_dimensions": {"width": 100, "height": 80, "depth": 60},
+                        "material": "PLA"
+                    },
+                    "design_brief": {"name": "test"}
+                }
+
+                from src.tools.modeling_tools import generate_scad_code
+                result = await generate_scad_code("test_project", design_specs)
+
+                assert result["status"] == "ok"
+                assert "module " in result["scad_content"]
+            finally:
+                modeling_tools.PROJECTS_DIR = original_dir
+
+    @pytest.mark.asyncio
+    async def test_scad_contains_assembly_section(self):
+        """Test that generated SCAD contains the ASSEMBLY section."""
+        os.environ["ANTHROPIC_API_KEY"] = "test_key"
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            import src.tools.modeling_tools as modeling_tools
+            original_dir = modeling_tools.PROJECTS_DIR
+            modeling_tools.PROJECTS_DIR = tmpdir
+
+            try:
+                modeling_dir = Path(tmpdir) / "test_project" / "modeling"
+                modeling_dir.mkdir(parents=True, exist_ok=True)
+
+                design_specs = {
+                    "project_name": "test_project",
+                    "specifications": {
+                        "overall_dimensions": {"width": 100, "height": 80, "depth": 60},
+                        "material": "PLA"
+                    },
+                    "design_brief": {"name": "test"}
+                }
+
+                from src.tools.modeling_tools import generate_scad_code
+                result = await generate_scad_code("test_project", design_specs)
+
+                assert result["status"] == "ok"
+                assert "// === ASSEMBLY ===" in result["scad_content"]
+            finally:
+                modeling_tools.PROJECTS_DIR = original_dir
+
+    @pytest.mark.asyncio
+    async def test_scad_multi_part_generates_part_files(self):
+        """Test that multi-part designs generate individual part files."""
+        os.environ["ANTHROPIC_API_KEY"] = "test_key"
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            import src.tools.modeling_tools as modeling_tools
+            original_dir = modeling_tools.PROJECTS_DIR
+            modeling_tools.PROJECTS_DIR = tmpdir
+
+            try:
+                modeling_dir = Path(tmpdir) / "test_project" / "modeling"
+                modeling_dir.mkdir(parents=True, exist_ok=True)
+
+                design_specs = {
+                    "project_name": "test_project",
+                    "specifications": {
+                        "overall_dimensions": {"width": 100, "height": 80, "depth": 60},
+                        "material": "PLA"
+                    },
+                    "design_brief": {"name": "test"},
+                    "parts": [
+                        {"name": "body", "quantity": 1, "dimensions": {"width": 100, "height": 80, "depth": 60}},
+                        {"name": "lid", "quantity": 1, "dimensions": {"width": 100, "height": 80, "depth": 10}}
+                    ]
+                }
+
+                from src.tools.modeling_tools import generate_scad_code
+                result = await generate_scad_code("test_project", design_specs)
+
+                assert result["status"] == "ok"
+                assert "part_files" in result
+                assert len(result["part_files"]) == 2
+                # Verify files exist
+                for part_file in result["part_files"]:
+                    assert Path(part_file).exists()
+            finally:
+                modeling_tools.PROJECTS_DIR = original_dir
+
+    @pytest.mark.asyncio
+    async def test_scad_generates_difference_for_hollow_box(self):
+        """Test that generated SCAD uses difference() for hollow box."""
+        os.environ["ANTHROPIC_API_KEY"] = "test_key"
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            import src.tools.modeling_tools as modeling_tools
+            original_dir = modeling_tools.PROJECTS_DIR
+            modeling_tools.PROJECTS_DIR = tmpdir
+
+            try:
+                modeling_dir = Path(tmpdir) / "test_project" / "modeling"
+                modeling_dir.mkdir(parents=True, exist_ok=True)
+
+                design_specs = {
+                    "project_name": "test_project",
+                    "specifications": {
+                        "overall_dimensions": {"width": 100, "height": 80, "depth": 60},
+                        "material": "PLA"
+                    },
+                    "design_brief": {"name": "test"}
+                }
+
+                from src.tools.modeling_tools import generate_scad_code
+                result = await generate_scad_code("test_project", design_specs)
+
+                assert result["status"] == "ok"
+                assert "difference()" in result["scad_content"]
+                assert "cube(" in result["scad_content"]
+            finally:
+                modeling_tools.PROJECTS_DIR = original_dir
+
+
 class TestExportModel:
     """Tests for export_model tool."""
 
@@ -210,25 +475,33 @@ class TestExportModel:
     async def test_export_model_with_valid_input_no_binary(self):
         """Test export_model returns pending status when OpenSCAD binary not found."""
         os.environ["ANTHROPIC_API_KEY"] = "test_key"
-        os.environ["OPENSCAD_PATH"] = "/nonexistent/openscad"
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            os.environ["PROJECTS_DIR"] = tmpdir
+            # Monkeypatch the module-level constants
+            import src.tools.modeling_tools as modeling_tools
+            original_projects_dir = modeling_tools.PROJECTS_DIR
+            original_openscad_path = modeling_tools.OPENSCAD_PATH
+            modeling_tools.PROJECTS_DIR = tmpdir
+            modeling_tools.OPENSCAD_PATH = "/nonexistent/openscad"
 
-            # Create modeling directory with SCAD file
-            scad_dir = Path(tmpdir) / "test_project" / "modeling" / "scad"
-            scad_dir.mkdir(parents=True, exist_ok=True)
+            try:
+                # Create modeling directory with SCAD file
+                scad_dir = Path(tmpdir) / "test_project" / "modeling" / "scad"
+                scad_dir.mkdir(parents=True, exist_ok=True)
 
-            scad_file = scad_dir / "model.scad"
-            scad_file.write_text("// test scad code")
+                scad_file = scad_dir / "model.scad"
+                scad_file.write_text("// test scad code")
 
-            from src.tools.modeling_tools import export_model
-            result = await export_model("test_project", "stl")
+                from src.tools.modeling_tools import export_model
+                result = await export_model("test_project", "stl")
 
-            assert isinstance(result, dict)
-            assert "status" in result
-            assert result["status"] == "pending"  # Expected when binary not found
-            assert "message" in result
+                assert isinstance(result, dict)
+                assert "status" in result
+                assert result["status"] == "pending"  # Expected when binary not found
+                assert "message" in result
+            finally:
+                modeling_tools.PROJECTS_DIR = original_projects_dir
+                modeling_tools.OPENSCAD_PATH = original_openscad_path
 
     @pytest.mark.asyncio
     async def test_export_model_with_empty_project_name(self):
