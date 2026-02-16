@@ -2204,4 +2204,155 @@ Tools are implemented per agent. See specific agent specs for:
 
 ---
 
+## CLI Interface
+
+The command-line interface provides interactive access to the 3D-ADK workflow without requiring API knowledge.
+
+**Start the CLI:**
+```bash
+python src/main.py --interactive
+# or simply
+python src/main.py
+```
+
+### Available Commands
+
+| Command | Description | Example |
+|---------|-------------|---------|
+| `help` | Show all available commands | `help` |
+| `new <name>` | Create a new project | `new phone_stand` |
+| `resume` | List and resume a previous project | `resume` |
+| `status` | Show current project status and phase | `status` |
+| `next` | Advance to the next phase | `next` |
+| `back` | Return to the previous phase | `back` |
+| `exit` / `quit` | Exit the CLI | `exit` |
+
+### Example Workflow
+
+```
+$ python src/main.py
+
+============================================================
+3D ADK - Interactive Command Interface
+============================================================
+Type 'help' for available commands
+
+3d-adk> new phone_stand
+
+✓ Created project: phone_stand
+  Session ID: abc123def456
+  Current Phase: DESIGN
+
+3d-adk [abc123de]> status
+
+Project: phone_stand
+Phase: DESIGN
+Design Approved: ✗
+Model Exported: ✗
+Print Started: ✗
+Created: 2025-02-15T10:00:00
+Updated: 2025-02-15T10:05:00
+
+3d-adk [abc123de]> next
+
+[ERROR] Cannot advance to next phase until design is approved
+
+3d-adk [abc123de]> resume
+
+Active Projects:
+  1. phone_stand (DESIGN) [abc123de...]
+
+Enter project number to resume (or press Ctrl+C to cancel):
+
+3d-adk [abc123de]> exit
+
+Goodbye!
+```
+
+### Command Details
+
+#### `new <project_name>`
+Creates a new project and loads it.
+
+**Parameters:**
+- `project_name` (str): Name of the new project
+
+**Output:**
+```
+✓ Created project: phone_stand
+  Session ID: abc123def456
+  Current Phase: DESIGN
+```
+
+**Errors:**
+- Project name is required
+- Project with same name may already exist
+
+#### `resume`
+Lists all active projects and lets you choose one to continue.
+
+**Output:**
+```
+Active Projects:
+  1. phone_stand (DESIGN) [abc123de...]
+  2. desk_organizer (MODELING) [xyz789ab...]
+
+Enter project number to resume (or press Ctrl+C to cancel):
+```
+
+**Usage:**
+- Type a number to resume that project
+- Press Ctrl+C to cancel without selecting
+
+#### `status`
+Shows the current project's phase, progress flags, and timestamps.
+
+**Output:**
+```
+Project: phone_stand
+Phase: DESIGN
+Design Approved: ✓
+Model Exported: ✗
+Print Started: ✗
+Created: 2025-02-15T10:00:00
+Updated: 2025-02-15T10:05:00
+```
+
+**Requirements:**
+- A project must be loaded (`new` or `resume`)
+
+#### `next`
+Advances to the next phase.
+
+**Phase Transitions:**
+- `design` → `modeling` (requires design approval)
+- `modeling` → `monitor` (requires model export)
+- `monitor` → cannot advance further
+
+**Output on success:**
+```
+✓ Advanced to phase: MODELING
+```
+
+**Output on failure:**
+```
+[ERROR] Cannot advance to next phase until design is approved
+```
+
+#### `back`
+Returns to the previous phase.
+
+**Allowed Transitions:**
+- `modeling` → `design` (always allowed if print not started)
+- `monitor` → `modeling` (only if print hasn't started)
+- `design` → error (cannot go back from design)
+
+**Output on success:**
+```
+✓ Backtracked to phase: DESIGN
+```
+
+#### `help`
+Displays the full list of available commands with usage examples.
+
 **Implementation details:** See spec files in `specs/` folder
