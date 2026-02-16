@@ -1,15 +1,17 @@
 """Modeling phase tools for generating OpenSCAD models and exporting for printing."""
 
+import asyncio
 import json
 import logging
 import os
 import subprocess
+import time
 import uuid
 from pathlib import Path
 from typing import Optional
 from datetime import datetime
 
-from src.config import PROJECTS_DIR, OPENSCAD_PATH
+from src.config import PROJECTS_DIR, OPENSCAD_PATH, OPENSCAD_OUTPUT_CACHE_ENABLED
 
 logger = logging.getLogger(__name__)
 
@@ -850,6 +852,20 @@ async def _export_single_part(project_name: str, export_format: str) -> dict:
     output_file = exports_dir / f"model.{export_format}"
 
     try:
+        # Check if output is cached and newer than scad file
+        scad_mtime = scad_path.stat().st_mtime
+        if (OPENSCAD_OUTPUT_CACHE_ENABLED
+                and output_file.exists()
+                and output_file.stat().st_mtime > scad_mtime
+                and _validate_export_file(output_file)):
+            logger.info(f"_export_single_part: using cached export (newer than .scad)")
+            return {
+                "status": "ok",
+                "export_path": str(output_file),
+                "export_format": export_format,
+                "message": f"Model export up-to-date (cached) in {export_format.upper()}"
+            }
+
         cmd = [OPENSCAD_PATH, "-o", str(output_file), str(scad_path)]
         subprocess.run(cmd, check=True, capture_output=True, timeout=300)
         logger.info(f"_export_single_part: model exported to {output_file}")
@@ -1056,10 +1072,22 @@ async def render_preview(
         preview_paths = []
         successful_perspectives = []
 
+        # Get scad file mtime for cache validation
+        scad_mtime = scad_path.stat().st_mtime
+
         for perspective in perspectives:
             try:
                 camera_params = _get_camera_params(perspective)
                 output_file = previews_dir / f"preview_{perspective}.png"
+
+                # Check if output is cached and newer than scad file
+                if (OPENSCAD_OUTPUT_CACHE_ENABLED
+                        and output_file.exists()
+                        and output_file.stat().st_mtime > scad_mtime):
+                    logger.info(f"render_preview: using cached {perspective} preview (newer than .scad)")
+                    preview_paths.append(str(output_file))
+                    successful_perspectives.append(perspective)
+                    continue
 
                 # Run OpenSCAD to generate preview
                 cmd = [

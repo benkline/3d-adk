@@ -10,7 +10,12 @@ from datetime import datetime
 
 from anthropic import Anthropic
 
-from src.config import PROJECTS_DIR, ANTHROPIC_API_KEY
+from src.config import (
+    PROJECTS_DIR,
+    ANTHROPIC_API_KEY,
+    SKETCH_PROMPT_CACHE_ENABLED,
+    IMAGE_PROMPT_CACHE_ENABLED,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -522,13 +527,38 @@ async def generate_sketches(project_name: str, design_brief: dict) -> dict:
         }
 
     try:
+        # Load existing metadata to check cache
+        sketches_dir = _get_sketches_dir(project_name)
+        metadata = _load_sketches_metadata(project_name)
+
+        # Check if we have cached sketches with the same brief hash
+        current_brief_hash = str(hash(json.dumps(design_brief, sort_keys=True)))
+        stored_hash = metadata.get("design_brief_hash")
+
+        if (SKETCH_PROMPT_CACHE_ENABLED
+                and stored_hash == current_brief_hash
+                and len(metadata.get("sketches", [])) > 0):
+            # Return cached sketches without calling Claude
+            cached_sketches = metadata["sketches"]
+            logger.info(
+                f"generate_sketches: returning {len(cached_sketches)} cached sketches for {project_name} "
+                f"(brief unchanged)"
+            )
+            prompts = [s.get("prompt", "Cached sketch") for s in cached_sketches]
+            return {
+                "status": "ok",
+                "sketches": cached_sketches,
+                "sketch_count": len(cached_sketches),
+                "output_dir": str(sketches_dir),
+                "prompts": prompts,
+                "message": f"Returned {len(cached_sketches)} cached sketch variations (brief unchanged)"
+            }
+
         # Engineer prompts from design brief using Claude
         prompts = _engineer_sketch_prompts(design_brief)
         logger.info(f"generate_sketches: engineered {len(prompts)} prompts for {project_name}")
 
         # Create sketch records with metadata
-        sketches_dir = _get_sketches_dir(project_name)
-        metadata = _load_sketches_metadata(project_name)
         sketches = []
 
         for variation_num, prompt in enumerate(prompts, 1):
@@ -549,7 +579,7 @@ async def generate_sketches(project_name: str, design_brief: dict) -> dict:
         # Update and save metadata
         metadata["sketches"].extend(sketches)
         metadata["last_updated"] = datetime.now().isoformat()
-        metadata["design_brief_hash"] = str(hash(json.dumps(design_brief, sort_keys=True)))
+        metadata["design_brief_hash"] = current_brief_hash
         _save_sketches_metadata(project_name, metadata)
 
         logger.info(f"generate_sketches: created {len(sketches)} sketch records for {project_name}")
@@ -569,6 +599,17 @@ async def generate_sketches(project_name: str, design_brief: dict) -> dict:
             "status": "error",
             "message": f"Failed to generate sketches: {str(e)}"
         }
+
+
+def _load_design_brief(project_name: str) -> dict:
+    """Load design brief from interview.json if it exists."""
+    interview_path = Path(PROJECTS_DIR) / project_name / "design" / "interview.json"
+    design_brief = {}
+    if interview_path.exists():
+        with open(interview_path) as f:
+            interview_data = json.load(f)
+            design_brief = interview_data.get("design_brief", {})
+    return design_brief
 
 
 async def generate_images(
@@ -629,17 +670,32 @@ async def generate_images(
         # Load existing metadata
         metadata = _load_images_metadata(project_name)
 
-        # Load design brief if it exists
-        interview_path = Path(PROJECTS_DIR) / project_name / "design" / "interview.json"
-        design_brief = {}
-        if interview_path.exists():
-            with open(interview_path) as f:
-                interview_data = json.load(f)
-                design_brief = interview_data.get("design_brief", {})
+        # Load design brief
+        design_brief = _load_design_brief(project_name)
 
-        # Engineer production-quality render prompt
-        prompts = _engineer_image_prompts(design_brief, sketch_id, perspective, feedback)
-        prompt = prompts[0] if prompts else "High-quality render of the designed product"
+        # Check for cached prompt file
+        prompt_filename = f"{sketch_id}_{perspective}_prompt.txt"
+        prompt_filepath = images_dir / prompt_filename
+
+        prompt = None
+        if (IMAGE_PROMPT_CACHE_ENABLED
+                and prompt_filepath.exists()
+                and not feedback):
+            # Use cached prompt (bypass Claude if no feedback for refinement)
+            with open(prompt_filepath) as f:
+                prompt = f.read().strip()
+            logger.info(
+                f"generate_images: using cached prompt for {sketch_id} perspective {perspective}"
+            )
+        else:
+            # Engineer production-quality render prompt
+            prompts = _engineer_image_prompts(design_brief, sketch_id, perspective, feedback)
+            prompt = prompts[0] if prompts else "High-quality render of the designed product"
+
+            # Write prompt to cache file for future use
+            prompt_filepath.parent.mkdir(parents=True, exist_ok=True)
+            with open(prompt_filepath, "w") as f:
+                f.write(prompt)
 
         # Build material context for metadata
         materials = design_brief.get("materials", ["PLA"])

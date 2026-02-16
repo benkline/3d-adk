@@ -33,6 +33,13 @@ SESSIONS_DIR = os.getenv("SESSIONS_DIR", "./sessions")
 # Material Cost Configuration
 FILAMENT_COST_PER_KG = float(os.getenv("FILAMENT_COST_PER_KG", "25.0"))  # USD
 
+# Performance Tuning Configuration
+SKETCH_PROMPT_CACHE_ENABLED = os.getenv("SKETCH_PROMPT_CACHE_ENABLED", "true").lower() != "false"
+IMAGE_PROMPT_CACHE_ENABLED = os.getenv("IMAGE_PROMPT_CACHE_ENABLED", "true").lower() != "false"
+OPENSCAD_OUTPUT_CACHE_ENABLED = os.getenv("OPENSCAD_OUTPUT_CACHE_ENABLED", "true").lower() != "false"
+OCTOPRINT_POLL_INTERVAL_S = float(os.getenv("OCTOPRINT_POLL_INTERVAL_S", "5.0"))
+METRICS_WINDOW_SIZE = int(os.getenv("METRICS_WINDOW_SIZE", "500"))
+
 # Validate required keys
 missing_keys = [key for key in REQUIRED_KEYS if not os.getenv(key)]
 if missing_keys:
