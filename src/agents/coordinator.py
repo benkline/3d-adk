@@ -16,9 +16,15 @@ from src.tools.coordinator_tools import (
     approve_design,
     mark_model_exported,
     mark_print_started,
+    get_project_structure,
+    organize_project_files,
+    create_design_version,
+    list_design_versions,
+    backup_project,
+    export_project,
 )
 
-# Create coordinator agent with eight tools
+# Create coordinator agent with fourteen tools
 coordinator_agent = LlmAgent(
     name="coordinator_agent",
     description="Main coordinator agent that orchestrates 3D printing workflow across all phases",
@@ -31,6 +37,7 @@ Current responsibilities:
 3. **Phase Transitions**: Validate and advance between design → modeling → monitor phases
 4. **State Management**: Track and update phase completion flags (design approval, model export, print start)
 5. **Backtracking**: Allow users to return to previous phases when needed
+6. **File Management**: Organize project files, create design versions, backup projects, and export archives
 
 Available commands:
 - `create_project_session` - Start a new project
@@ -41,6 +48,12 @@ Available commands:
 - `mark_print_started` - Mark print as started (prevents backtrack from monitor)
 - `advance_phase` - Move to the next phase (with validation)
 - `backtrack_phase` - Return to the previous phase (with validation)
+- `get_project_structure` - View project file organization and directory structure
+- `organize_project_files` - Ensure proper directory structure exists
+- `create_design_version` - Create a snapshot of current design files
+- `list_design_versions` - View all saved design versions
+- `backup_project` - Create a complete backup of the project
+- `export_project` - Export project as a zip archive
 
 Phase Transition Rules:
 - Design → Modeling: Requires design approval (call approve_design first)
@@ -54,6 +67,7 @@ Guidelines:
 - Provide clear feedback about current status and available actions
 - Allow users to navigate between phases while preserving work
 - Use state management tools to track phase progress
+- Manage project file organization and create regular backups
 - Delegate to appropriate sub-agents based on current phase""",
     tools=[
         FunctionTool(func=create_project_session),
@@ -64,6 +78,12 @@ Guidelines:
         FunctionTool(func=approve_design),
         FunctionTool(func=mark_model_exported),
         FunctionTool(func=mark_print_started),
+        FunctionTool(func=get_project_structure),
+        FunctionTool(func=organize_project_files),
+        FunctionTool(func=create_design_version),
+        FunctionTool(func=list_design_versions),
+        FunctionTool(func=backup_project),
+        FunctionTool(func=export_project),
     ],
     sub_agents=[design_agent, modeling_agent, monitor_agent]
 )

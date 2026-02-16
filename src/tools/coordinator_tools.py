@@ -1,8 +1,16 @@
 """Coordinator phase and session management tools."""
 
 import logging
+import os
+import json
+import shutil
+import zipfile
+import uuid
+from pathlib import Path
+from datetime import datetime
 from typing import Optional
 
+from src.config import PROJECTS_DIR
 from src.session import (
     create_project,
     get_project,
@@ -505,4 +513,454 @@ async def mark_print_started(session_id: str) -> dict:
         return {
             "status": "error",
             "message": f"Failed to mark print as started: {str(e)}"
+        }
+
+
+async def get_project_structure(project_name: str) -> dict:
+    """Get the file structure and organization of a project.
+
+    Walks the project directory and returns metadata about all files and directories.
+
+    Args:
+        project_name: Name of the project (non-empty)
+
+    Returns:
+        dict with keys:
+        - status: "ok" or "error"
+        - project_name: Project name (if status is "ok")
+        - root_path: Root directory path (if status is "ok")
+        - files: List of {path, size_bytes} dicts (if status is "ok")
+        - total_files: Total number of files (if status is "ok")
+        - total_size_bytes: Total size of all files (if status is "ok")
+        - message: Error message (if status is "error")
+
+    Error Handling:
+        Returns error dict with message rather than raising exceptions
+    """
+    if not project_name or not isinstance(project_name, str) or project_name.strip() == "":
+        logger.warning("get_project_structure called with empty project_name")
+        return {
+            "status": "error",
+            "message": "project_name is required and must be a non-empty string"
+        }
+
+    try:
+        project_path = Path(PROJECTS_DIR) / project_name
+
+        if not project_path.exists():
+            logger.warning(f"Project directory not found: {project_path}")
+            return {
+                "status": "error",
+                "message": f"Project directory not found: {project_path}"
+            }
+
+        files = []
+        total_size = 0
+
+        for file_path in project_path.rglob("*"):
+            if file_path.is_file():
+                rel_path = str(file_path.relative_to(project_path))
+                size = file_path.stat().st_size
+                files.append({
+                    "path": rel_path,
+                    "size_bytes": size
+                })
+                total_size += size
+
+        logger.info(f"Retrieved project structure for '{project_name}': {len(files)} files, {total_size} bytes")
+
+        return {
+            "status": "ok",
+            "project_name": project_name,
+            "root_path": str(project_path),
+            "files": files,
+            "total_files": len(files),
+            "total_size_bytes": total_size
+        }
+
+    except Exception as e:
+        logger.error(f"Error getting project structure: {str(e)}")
+        return {
+            "status": "error",
+            "message": f"Failed to get project structure: {str(e)}"
+        }
+
+
+async def organize_project_files(project_name: str) -> dict:
+    """Ensure project files are properly organized with correct directory structure.
+
+    Creates all required subdirectories for a project if they don't exist.
+
+    Args:
+        project_name: Name of the project (non-empty)
+
+    Returns:
+        dict with keys:
+        - status: "ok" or "error"
+        - project_name: Project name (if status is "ok")
+        - directories_created: List of created directories (if status is "ok")
+        - existing_directories: List of existing directories (if status is "ok")
+        - message: Info or error message
+
+    Error Handling:
+        Returns error dict with message rather than raising exceptions
+    """
+    if not project_name or not isinstance(project_name, str) or project_name.strip() == "":
+        logger.warning("organize_project_files called with empty project_name")
+        return {
+            "status": "error",
+            "message": "project_name is required and must be a non-empty string"
+        }
+
+    try:
+        project_path = Path(PROJECTS_DIR) / project_name
+        required_dirs = [
+            project_path / "design",
+            project_path / "design" / "sketches",
+            project_path / "design" / "images",
+            project_path / "model",
+            project_path / "model" / "exports",
+            project_path / "print",
+        ]
+
+        created_dirs = []
+        existing_dirs = []
+
+        for dir_path in required_dirs:
+            if dir_path.exists():
+                existing_dirs.append(str(dir_path))
+            else:
+                dir_path.mkdir(parents=True, exist_ok=True)
+                created_dirs.append(str(dir_path))
+
+        logger.info(f"Organized project '{project_name}': created {len(created_dirs)}, existing {len(existing_dirs)}")
+
+        return {
+            "status": "ok",
+            "project_name": project_name,
+            "directories_created": created_dirs,
+            "existing_directories": existing_dirs,
+            "message": f"Project organized: {len(created_dirs)} directories created, {len(existing_dirs)} already existed"
+        }
+
+    except Exception as e:
+        logger.error(f"Error organizing project files: {str(e)}")
+        return {
+            "status": "error",
+            "message": f"Failed to organize project files: {str(e)}"
+        }
+
+
+async def create_design_version(project_name: str, version_label: str = "") -> dict:
+    """Create a snapshot of current design files as a version.
+
+    Copies all design files (except versions/) to design/versions/{version_id}/ and updates version history.
+
+    Args:
+        project_name: Name of the project (non-empty)
+        version_label: Optional human-readable label for this version
+
+    Returns:
+        dict with keys:
+        - status: "ok" or "error"
+        - project_name: Project name (if status is "ok")
+        - version_id: UUID of the created version (if status is "ok")
+        - label: Version label (if status is "ok")
+        - timestamp: ISO-8601 timestamp (if status is "ok")
+        - files_versioned: Number of files copied (if status is "ok")
+        - message: Info or error message
+
+    Error Handling:
+        Returns error dict with message rather than raising exceptions
+    """
+    if not project_name or not isinstance(project_name, str) or project_name.strip() == "":
+        logger.warning("create_design_version called with empty project_name")
+        return {
+            "status": "error",
+            "message": "project_name is required and must be a non-empty string"
+        }
+
+    try:
+        project_path = Path(PROJECTS_DIR) / project_name
+        design_path = project_path / "design"
+        versions_dir = design_path / "versions"
+
+        # Ensure versions directory exists
+        versions_dir.mkdir(parents=True, exist_ok=True)
+
+        # Generate version ID
+        version_id = str(uuid.uuid4())
+        version_path = versions_dir / version_id
+        version_path.mkdir(parents=True, exist_ok=True)
+
+        # Copy design files (exclude versions/ directory)
+        files_copied = 0
+        for item in design_path.iterdir():
+            if item.name == "versions":
+                continue
+            if item.is_dir():
+                shutil.copytree(item, version_path / item.name, dirs_exist_ok=True)
+                files_copied += sum(1 for _ in (version_path / item.name).rglob("*") if _.is_file())
+            elif item.is_file():
+                shutil.copy2(item, version_path / item.name)
+                files_copied += 1
+
+        # Update version history
+        history_path = versions_dir / "version_history.json"
+        history = []
+        if history_path.exists():
+            with open(history_path, "r") as f:
+                history = json.load(f)
+
+        timestamp = datetime.utcnow().isoformat()
+        history.append({
+            "version_id": version_id,
+            "label": version_label or f"Version {len(history) + 1}",
+            "timestamp": timestamp,
+            "files_count": files_copied
+        })
+
+        with open(history_path, "w") as f:
+            json.dump(history, f, indent=2)
+
+        logger.info(f"Created design version for '{project_name}': {version_id} with {files_copied} files")
+
+        return {
+            "status": "ok",
+            "project_name": project_name,
+            "version_id": version_id,
+            "label": version_label or f"Version {len(history)}",
+            "timestamp": timestamp,
+            "files_versioned": files_copied,
+            "message": f"Design version created with {files_copied} files"
+        }
+
+    except Exception as e:
+        logger.error(f"Error creating design version: {str(e)}")
+        return {
+            "status": "error",
+            "message": f"Failed to create design version: {str(e)}"
+        }
+
+
+async def list_design_versions(project_name: str) -> dict:
+    """List all saved design versions for a project.
+
+    Reads the design version history and returns metadata for each version.
+
+    Args:
+        project_name: Name of the project (non-empty)
+
+    Returns:
+        dict with keys:
+        - status: "ok" or "error"
+        - project_name: Project name (if status is "ok")
+        - versions: List of {version_id, label, timestamp, files_count} dicts (if status is "ok")
+        - total_versions: Total number of versions (if status is "ok")
+        - message: Info or error message
+
+    Error Handling:
+        Returns error dict with message rather than raising exceptions
+    """
+    if not project_name or not isinstance(project_name, str) or project_name.strip() == "":
+        logger.warning("list_design_versions called with empty project_name")
+        return {
+            "status": "error",
+            "message": "project_name is required and must be a non-empty string"
+        }
+
+    try:
+        project_path = Path(PROJECTS_DIR) / project_name
+        history_path = project_path / "design" / "versions" / "version_history.json"
+
+        versions = []
+        if history_path.exists():
+            with open(history_path, "r") as f:
+                versions = json.load(f)
+
+        logger.info(f"Retrieved {len(versions)} design versions for '{project_name}'")
+
+        return {
+            "status": "ok",
+            "project_name": project_name,
+            "versions": versions,
+            "total_versions": len(versions),
+            "message": f"Retrieved {len(versions)} design versions"
+        }
+
+    except Exception as e:
+        logger.error(f"Error listing design versions: {str(e)}")
+        return {
+            "status": "error",
+            "message": f"Failed to list design versions: {str(e)}"
+        }
+
+
+async def backup_project(project_name: str) -> dict:
+    """Create a full backup of project files.
+
+    Creates a timestamped backup of design/, model/, and print/ directories.
+
+    Args:
+        project_name: Name of the project (non-empty)
+
+    Returns:
+        dict with keys:
+        - status: "ok" or "error"
+        - project_name: Project name (if status is "ok")
+        - backup_id: UUID of the backup (if status is "ok")
+        - timestamp: ISO-8601 timestamp (if status is "ok")
+        - files_backed_up: Number of files in backup (if status is "ok")
+        - backup_path: Path to backup directory (if status is "ok")
+        - message: Info or error message
+
+    Error Handling:
+        Returns error dict with message rather than raising exceptions
+    """
+    if not project_name or not isinstance(project_name, str) or project_name.strip() == "":
+        logger.warning("backup_project called with empty project_name")
+        return {
+            "status": "error",
+            "message": "project_name is required and must be a non-empty string"
+        }
+
+    try:
+        project_path = Path(PROJECTS_DIR) / project_name
+        backups_dir = project_path / "backups"
+        backups_dir.mkdir(parents=True, exist_ok=True)
+
+        # Generate backup ID
+        backup_id = str(uuid.uuid4())
+        backup_path = backups_dir / backup_id
+        backup_path.mkdir(parents=True, exist_ok=True)
+
+        # Copy design, model, print directories (exclude backups and exports)
+        files_backed_up = 0
+        for source_dir in ["design", "model", "print"]:
+            source_path = project_path / source_dir
+            if source_path.exists():
+                # Copy excluding certain subdirectories
+                for item in source_path.iterdir():
+                    if item.name in ["backups", "exports"]:
+                        continue
+                    if item.is_dir():
+                        shutil.copytree(item, backup_path / source_dir / item.name, dirs_exist_ok=True)
+                        files_backed_up += sum(1 for _ in (backup_path / source_dir / item.name).rglob("*") if _.is_file())
+                    elif item.is_file():
+                        (backup_path / source_dir).mkdir(parents=True, exist_ok=True)
+                        shutil.copy2(item, backup_path / source_dir / item.name)
+                        files_backed_up += 1
+
+        # Update backup manifest
+        manifest_path = backups_dir / "backup_manifest.json"
+        manifest = []
+        if manifest_path.exists():
+            with open(manifest_path, "r") as f:
+                manifest = json.load(f)
+
+        timestamp = datetime.utcnow().isoformat()
+        manifest.append({
+            "backup_id": backup_id,
+            "timestamp": timestamp,
+            "files_count": files_backed_up
+        })
+
+        with open(manifest_path, "w") as f:
+            json.dump(manifest, f, indent=2)
+
+        logger.info(f"Created backup for '{project_name}': {backup_id} with {files_backed_up} files")
+
+        return {
+            "status": "ok",
+            "project_name": project_name,
+            "backup_id": backup_id,
+            "timestamp": timestamp,
+            "files_backed_up": files_backed_up,
+            "backup_path": str(backup_path),
+            "message": f"Backup created with {files_backed_up} files"
+        }
+
+    except Exception as e:
+        logger.error(f"Error backing up project: {str(e)}")
+        return {
+            "status": "error",
+            "message": f"Failed to backup project: {str(e)}"
+        }
+
+
+async def export_project(project_name: str, export_format: str = "zip") -> dict:
+    """Export project as an archive file.
+
+    Creates a zip archive of the project (excluding backups and exports directories).
+
+    Args:
+        project_name: Name of the project (non-empty)
+        export_format: Export format (currently only "zip" supported)
+
+    Returns:
+        dict with keys:
+        - status: "ok" or "error"
+        - project_name: Project name (if status is "ok")
+        - export_path: Path to exported file (if status is "ok")
+        - file_count: Number of files in export (if status is "ok")
+        - size_bytes: Size of exported file (if status is "ok")
+        - message: Info or error message
+
+    Error Handling:
+        Returns error dict with message rather than raising exceptions
+    """
+    if not project_name or not isinstance(project_name, str) or project_name.strip() == "":
+        logger.warning("export_project called with empty project_name")
+        return {
+            "status": "error",
+            "message": "project_name is required and must be a non-empty string"
+        }
+
+    if export_format != "zip":
+        logger.warning(f"Unsupported export format: {export_format}")
+        return {
+            "status": "error",
+            "message": f"Unsupported export format: {export_format}. Only 'zip' is currently supported."
+        }
+
+    try:
+        project_path = Path(PROJECTS_DIR) / project_name
+        exports_dir = project_path / "exports"
+        exports_dir.mkdir(parents=True, exist_ok=True)
+
+        timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+        export_filename = f"{project_name}_{timestamp}.zip"
+        export_path = exports_dir / export_filename
+
+        # Create zip file
+        file_count = 0
+        with zipfile.ZipFile(export_path, "w", zipfile.ZIP_DEFLATED) as zipf:
+            for source_dir in ["design", "model", "print"]:
+                source_path = project_path / source_dir
+                if source_path.exists():
+                    for item in source_path.rglob("*"):
+                        if item.is_file():
+                            # Skip backups and exports directories
+                            if "backups" not in item.parts and "exports" not in item.parts:
+                                arcname = item.relative_to(project_path)
+                                zipf.write(item, arcname)
+                                file_count += 1
+
+        size_bytes = export_path.stat().st_size
+        logger.info(f"Exported project '{project_name}' to {export_filename}: {file_count} files, {size_bytes} bytes")
+
+        return {
+            "status": "ok",
+            "project_name": project_name,
+            "export_path": str(export_path),
+            "file_count": file_count,
+            "size_bytes": size_bytes,
+            "message": f"Project exported: {file_count} files, {size_bytes} bytes"
+        }
+
+    except Exception as e:
+        logger.error(f"Error exporting project: {str(e)}")
+        return {
+            "status": "error",
+            "message": f"Failed to export project: {str(e)}"
         }
