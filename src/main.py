@@ -30,6 +30,16 @@ def main():
         action="version",
         version=f"%(prog)s {__version__}"
     )
+    parser.add_argument(
+        "-i", "--interactive",
+        action="store_true",
+        help="Start in interactive mode (default if no other action is specified)"
+    )
+    parser.add_argument(
+        "--project",
+        type=str,
+        help="Project name or session ID to load (requires --interactive)"
+    )
 
     args = parser.parse_args()
 
@@ -48,6 +58,13 @@ def main():
     logger.info(f"Log Level: {LOG_LEVEL}")
     logger.info(f"Projects Directory: {PROJECTS_DIR}")
     print()
+
+    # Start interactive CLI if requested (or default behavior if no args)
+    if args.interactive or (not args.project and len(sys.argv) == 1):
+        from src.cli import CLI
+
+        cli = CLI(session_id=args.project)
+        cli.run()
 
 
 if __name__ == "__main__":
