@@ -3,17 +3,240 @@
 ## Agents
 
 ### Coordinator Agent
-**Purpose:** Orchestrates workflow across all phases
+**Purpose:** Orchestrates 3D printing workflow across all phases (design, modeling, monitor)
 
-**Methods:**
-- `run_async(user_input, session_id)` → agent response
+**Implementation:** `google.adk.agents.LlmAgent` with five `FunctionTool`-wrapped async functions and three sub-agents
+
+**Agent Name:** `coordinator_agent`
+
+**Model:** Uses configured `LLM_MODEL` from `src.config`
+
+**Sub-Agents:**
+- `design_phase_agent` - Design phase orchestration
+- `modeling_phase_agent` - Modeling phase orchestration
+- `monitor_phase_agent` - Print monitoring orchestration
+
+**Responsibilities:**
+1. Create and manage project sessions
+2. Track current phase and completion status
+3. Route to appropriate sub-agents based on phase
+4. Validate and execute phase transitions
+5. Support backtracking between phases (with guards)
+
+See: [../specs/COORDINATOR_AGENT_SPEC.md](../specs/COORDINATOR_AGENT_SPEC.md) for detailed specification
 
 **Tools:**
-- Routes to sub-agents based on current phase
-- Manages phase transitions
-- Maintains session state
 
-See: [../specs/COORDINATOR_AGENT_SPEC.md](../specs/COORDINATOR_AGENT_SPEC.md)
+#### `create_project_session(project_name: str) -> dict`
+Create a new project session for 3D printing workflow.
+
+**Parameters:**
+- `project_name` (str): Name of the project (non-empty)
+
+**Returns:** dict with keys:
+- `status` (str): "ok" or "error"
+- `session_id` (str): Unique session identifier (if status is "ok")
+- `project_name` (str): Project name (if status is "ok")
+- `current_phase` (str): Current phase, always "design" for new projects
+- `message` (str): Error message (if status is "error")
+
+**Error Handling:** Returns error dict with message rather than raising exceptions
+
+**Example:**
+```python
+result = await create_project_session(project_name="phone_stand")
+# Returns: {"status": "ok", "session_id": "abc123", "project_name": "phone_stand", "current_phase": "design"}
+```
+
+---
+
+#### `get_project_status(session_id: str) -> dict`
+Get current project status and phase.
+
+**Parameters:**
+- `session_id` (str): Session ID to retrieve
+
+**Returns:** dict with keys:
+- `status` (str): "ok" or "error"
+- `current_phase` (str): Current phase ("design", "modeling", "monitor")
+- `design_approved` (bool): Whether design is approved
+- `model_exported` (bool): Whether model is exported to STL/3MF
+- `print_started` (bool): Whether print has started
+- `project_name` (str): Name of the project
+- `created_at` (str): Creation timestamp (ISO-8601)
+- `updated_at` (str): Last update timestamp (ISO-8601)
+- `message` (str): Error message (if status is "error")
+
+**Error Handling:** Returns error dict with message rather than raising exceptions
+
+**Example:**
+```python
+result = await get_project_status(session_id="abc123")
+# Returns: {
+#   "status": "ok",
+#   "current_phase": "design",
+#   "design_approved": False,
+#   "model_exported": False,
+#   "print_started": False,
+#   "project_name": "phone_stand",
+#   "created_at": "2025-02-15T10:00:00",
+#   "updated_at": "2025-02-15T10:05:00"
+# }
+```
+
+---
+
+#### `list_project_sessions() -> dict`
+List all available project sessions.
+
+**Returns:** dict with keys:
+- `status` (str): "ok" or "error"
+- `sessions` (list): List of session dicts, each with:
+  - `session_id` (str): Session identifier
+  - `project_name` (str): Project name
+  - `current_phase` (str): Current phase
+  - `created_at` (str): Creation timestamp
+- `message` (str): Error message (if status is "error")
+
+**Error Handling:** Returns error dict with message rather than raising exceptions
+
+**Example:**
+```python
+result = await list_project_sessions()
+# Returns: {
+#   "status": "ok",
+#   "sessions": [
+#     {"session_id": "abc123", "project_name": "phone_stand", "current_phase": "design", "created_at": "2025-02-15T10:00:00"},
+#     {"session_id": "def456", "project_name": "desk_organizer", "current_phase": "modeling", "created_at": "2025-02-14T09:00:00"}
+#   ]
+# }
+```
+
+---
+
+#### `advance_phase(session_id: str) -> dict`
+Advance to the next phase with validation.
+
+**Phase Transitions:**
+- `design → modeling`: Requires `design_approved = True`
+- `modeling → monitor`: Requires `model_exported = True`
+- `monitor`: Final phase, cannot advance further
+
+**Parameters:**
+- `session_id` (str): Session ID to advance
+
+**Returns:** dict with keys:
+- `status` (str): "ok" or "error"
+- `previous_phase` (str): Phase before transition
+- `current_phase` (str): Phase after transition
+- `message` (str): Info or error message
+
+**Transition Guards:**
+- Design must be approved before moving to modeling phase
+- Model must be exported before moving to monitor phase
+- Cannot advance from monitor phase (final phase)
+
+**Error Handling:** Returns error dict with message rather than raising exceptions
+
+**Example - Success:**
+```python
+# After design is approved
+result = await advance_phase(session_id="abc123")
+# Returns: {
+#   "status": "ok",
+#   "previous_phase": "design",
+#   "current_phase": "modeling",
+#   "message": "Successfully advanced from design to modeling"
+# }
+```
+
+**Example - Validation Error:**
+```python
+# When design is not approved
+result = await advance_phase(session_id="abc123")
+# Returns: {
+#   "status": "error",
+#   "message": "Cannot advance to modeling phase: design must be approved first"
+# }
+```
+
+---
+
+#### `backtrack_phase(session_id: str) -> dict`
+Backtrack to the previous phase with validation.
+
+**Backtrack Rules:**
+- `modeling → design`: Allowed anytime
+- `monitor → modeling`: Only if `print_started = False`
+- `design`: Cannot backtrack from initial phase (error)
+
+**Parameters:**
+- `session_id` (str): Session ID to backtrack
+
+**Returns:** dict with keys:
+- `status` (str): "ok" or "error"
+- `previous_phase` (str): Phase before backtrack
+- `current_phase` (str): Phase after backtrack
+- `message` (str): Info or error message
+
+**Backtrack Guards:**
+- Can backtrack from modeling to design anytime (to revise design)
+- Can backtrack from monitor to modeling only if print hasn't started
+- Cannot backtrack from design (no previous phase)
+
+**Error Handling:** Returns error dict with message rather than raising exceptions
+
+**Example - Success:**
+```python
+# Backtrack from modeling to design
+result = await backtrack_phase(session_id="abc123")
+# Returns: {
+#   "status": "ok",
+#   "previous_phase": "modeling",
+#   "current_phase": "design",
+#   "message": "Successfully backtracked from modeling to design"
+# }
+```
+
+**Example - Validation Error:**
+```python
+# Try to backtrack when print is active
+result = await backtrack_phase(session_id="abc123")
+# Returns: {
+#   "status": "error",
+#   "message": "Cannot backtrack from monitor phase: print has already started"
+# }
+```
+
+---
+
+## Session State Schema
+
+```json
+{
+  "session_id": "uuid",
+  "project_name": "string",
+  "current_phase": "design|modeling|monitor",
+  "created_at": "ISO-8601 timestamp",
+  "updated_at": "ISO-8601 timestamp",
+  "design_approved": false,
+  "model_exported": false,
+  "print_started": false
+}
+```
+
+**Field Descriptions:**
+- `session_id`: Unique identifier for the project session
+- `project_name`: User-provided name for the project
+- `current_phase`: Current workflow phase
+  - `design`: Initial phase, design and blueprint creation
+  - `modeling`: Second phase, OpenSCAD model generation and export
+  - `monitor`: Final phase, 3D print monitoring via OctoPrint
+- `created_at`: When the project was created
+- `updated_at`: When the project was last modified
+- `design_approved`: Whether the design blueprint is approved (required to advance to modeling)
+- `model_exported`: Whether the model has been exported to STL/3MF (required to advance to monitor)
+- `print_started`: Whether the print job has begun (prevents backtracking from monitor)
 
 ### Design Agent
 **Purpose:** Transform design ideas into blueprints
