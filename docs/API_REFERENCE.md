@@ -1225,6 +1225,106 @@ Multiple print completions can be archived for the same project, creating a comp
 
 ---
 
+### Monitor Agent Integration Testing (TICKET-022)
+
+Comprehensive integration tests verify the complete monitoring workflow end-to-end. Tests cover the full pipeline from OctoPrint connection through print completion, quality assessment, and history storage.
+
+**Test File:** `tests/test_monitor_integration.py`
+
+**Test Coverage:** 20 tests across 4 test classes
+
+#### Test Classes
+
+**TestFullPipelineWorkflow (5 tests)**
+- Tests the complete monitoring lifecycle sequentially
+- Verifies OctoPrint connection, printer status, issue detection, interventions, and quality assessment
+- Key tests:
+  - `test_connection_test_returns_ok_with_mock`: Validates OctoPrint connection via mocked client
+  - `test_printer_status_returns_state_and_temps`: Verifies temperature and state readings
+  - `test_issue_detection_with_healthy_metrics`: Confirms healthy print produces no issues
+  - `test_intervention_logs_to_file`: Validates intervention logging
+  - `test_quality_assessment_persists`: Confirms quality assessment storage
+
+**TestFullPipelineOutputFiles (4 tests)**
+- Verifies that each workflow stage creates expected output files
+- Key files verified:
+  - `alerts.json` - Created by format_alert
+  - `quality_assessment.json` - Created by record_quality_assessment
+  - `print_summary.json` - Created by generate_print_summary
+  - `completed_prints.json` - Created by archive_print_metadata
+
+**TestIssueDetectionAndAlerts (5 tests)**
+- Tests issue detection → alert formatting → intervention pipeline
+- Issue types tested:
+  - Temperature anomalies (sustained deviation)
+  - Filament stalls (frozen progress)
+  - Temperature alert formatting with recommendations
+  - Intervention logging (pause/resume/cancel/adjust_temperature)
+
+**TestHistoryAndAnalytics (5 tests)**
+- Tests print completion, quality, summary, archive, and history workflow
+- Key operations:
+  - Summary aggregation of all monitoring data
+  - Archive requirement validation (requires summary)
+  - History storage and query
+  - Analytics computation across multiple prints
+
+**Additional Tests (1 test)**
+- `test_monitor_agent_has_fifteen_tools`: Verifies agent has all 15 tools configured
+
+#### Mock OctoPrint Pattern
+
+Tests use `@patch("src.tools.monitor_tools.OctoPrintClient")` decorator for mocking OctoPrint connections:
+
+```python
+@patch("src.tools.monitor_tools.OctoPrintClient")
+async def test_example(self, mock_class, patch_projects_dir):
+    mock_client = Mock()
+    mock_octorest = Mock()
+    mock_client._get_client.return_value = mock_octorest
+    mock_class.return_value = mock_client
+    # ... test code ...
+```
+
+#### Metrics Format for Testing
+
+Tests write metrics in JSONL format with the following snapshot structure:
+
+```json
+{
+  "progress": 50.0,
+  "state": "Printing",
+  "bed_temp": {"current": 60.0, "target": 60.0},
+  "nozzle_temp": {"current": 210.0, "target": 210.0},
+  "print_time_elapsed": 300,
+  "print_time_remaining": 1800
+}
+```
+
+#### Running Integration Tests
+
+```bash
+# Run all integration tests
+pytest tests/test_monitor_integration.py -v
+
+# Run specific test class
+pytest tests/test_monitor_integration.py::TestFullPipelineWorkflow -v
+
+# Run with detailed output
+pytest tests/test_monitor_integration.py -vv --tb=short
+```
+
+#### Test Statistics
+
+- Total integration tests: 20
+- All tests passing: ✅
+- Test coverage: Complete monitoring workflow end-to-end
+- Mock OctoPrint testing: ✅
+- Real file I/O testing: ✅
+- History/analytics testing: ✅
+
+---
+
 ## Print History & Analytics (TICKET-021)
 
 Store and analyze print history across projects for success rate tracking and cost estimation.
