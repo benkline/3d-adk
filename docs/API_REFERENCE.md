@@ -5,7 +5,7 @@
 ### Coordinator Agent
 **Purpose:** Orchestrates 3D printing workflow across all phases (design, modeling, monitor)
 
-**Implementation:** `google.adk.agents.LlmAgent` with eight `FunctionTool`-wrapped async functions and three sub-agents
+**Implementation:** `google.adk.agents.LlmAgent` with fourteen `FunctionTool`-wrapped async functions and three sub-agents
 
 **Agent Name:** `coordinator_agent`
 
@@ -23,6 +23,9 @@
 4. Route to appropriate sub-agents based on phase
 5. Validate and execute phase transitions
 6. Support backtracking between phases (with guards)
+7. Organize and manage project files and directory structure
+8. Create design version snapshots and maintain version history
+9. Create project backups and manage project exports
 
 See: [../specs/COORDINATOR_AGENT_SPEC.md](../specs/COORDINATOR_AGENT_SPEC.md) for detailed specification
 
@@ -293,6 +296,224 @@ result = await mark_print_started(session_id="abc123")
 #   "session_id": "abc123",
 #   "print_started": True,
 #   "message": "Print successfully marked as started"
+# }
+```
+
+---
+
+### File & Project Management Tools
+
+#### `get_project_structure(project_name: str) -> dict`
+Get the file structure and organization of a project.
+
+Walks the project directory and returns metadata about all files and directories.
+
+**Parameters:**
+- `project_name` (str): Name of the project (non-empty)
+
+**Returns:** dict with keys:
+- `status` (str): "ok" or "error"
+- `project_name` (str): Project name (if status is "ok")
+- `root_path` (str): Root directory path (if status is "ok")
+- `files` (list): List of {path, size_bytes} dicts (if status is "ok")
+- `total_files` (int): Total number of files (if status is "ok")
+- `total_size_bytes` (int): Total size of all files (if status is "ok")
+- `message` (str): Error message (if status is "error")
+
+**Error Handling:** Returns error dict with message rather than raising exceptions
+
+**Example:**
+```python
+result = await get_project_structure(project_name="phone_stand")
+# Returns: {
+#   "status": "ok",
+#   "project_name": "phone_stand",
+#   "root_path": "./projects/phone_stand",
+#   "files": [
+#     {"path": "design/interview.json", "size_bytes": 1024},
+#     {"path": "design/blueprint.md", "size_bytes": 2048}
+#   ],
+#   "total_files": 2,
+#   "total_size_bytes": 3072
+# }
+```
+
+---
+
+#### `organize_project_files(project_name: str) -> dict`
+Ensure project files are properly organized with correct directory structure.
+
+Creates all required subdirectories (design/, design/sketches/, design/images/, model/, model/exports/, print/) if they don't exist.
+
+**Parameters:**
+- `project_name` (str): Name of the project (non-empty)
+
+**Returns:** dict with keys:
+- `status` (str): "ok" or "error"
+- `project_name` (str): Project name (if status is "ok")
+- `directories_created` (list): List of created directories (if status is "ok")
+- `existing_directories` (list): List of existing directories (if status is "ok")
+- `message` (str): Info or error message
+
+**Error Handling:** Returns error dict with message rather than raising exceptions
+
+**Example:**
+```python
+result = await organize_project_files(project_name="phone_stand")
+# Returns: {
+#   "status": "ok",
+#   "project_name": "phone_stand",
+#   "directories_created": ["./projects/phone_stand/design/sketches"],
+#   "existing_directories": ["./projects/phone_stand/design", "..."],
+#   "message": "Project organized: 1 directories created, 5 already existed"
+# }
+```
+
+---
+
+#### `create_design_version(project_name: str, version_label: str = "") -> dict`
+Create a snapshot of current design files as a version.
+
+Copies all design files (except versions/) to design/versions/{version_id}/ and updates version history.
+
+**Parameters:**
+- `project_name` (str): Name of the project (non-empty)
+- `version_label` (str): Optional human-readable label for this version
+
+**Returns:** dict with keys:
+- `status` (str): "ok" or "error"
+- `project_name` (str): Project name (if status is "ok")
+- `version_id` (str): UUID of the created version (if status is "ok")
+- `label` (str): Version label (if status is "ok")
+- `timestamp` (str): ISO-8601 timestamp (if status is "ok")
+- `files_versioned` (int): Number of files copied (if status is "ok")
+- `message` (str): Info or error message
+
+**Error Handling:** Returns error dict with message rather than raising exceptions
+
+**Example:**
+```python
+result = await create_design_version(project_name="phone_stand", version_label="v1.0")
+# Returns: {
+#   "status": "ok",
+#   "project_name": "phone_stand",
+#   "version_id": "550e8400-e29b-41d4-a716-446655440000",
+#   "label": "v1.0",
+#   "timestamp": "2025-02-15T10:30:00",
+#   "files_versioned": 5,
+#   "message": "Design version created with 5 files"
+# }
+```
+
+---
+
+#### `list_design_versions(project_name: str) -> dict`
+List all saved design versions for a project.
+
+Reads the design version history and returns metadata for each version.
+
+**Parameters:**
+- `project_name` (str): Name of the project (non-empty)
+
+**Returns:** dict with keys:
+- `status` (str): "ok" or "error"
+- `project_name` (str): Project name (if status is "ok")
+- `versions` (list): List of {version_id, label, timestamp, files_count} dicts (if status is "ok")
+- `total_versions` (int): Total number of versions (if status is "ok")
+- `message` (str): Info or error message
+
+**Error Handling:** Returns error dict with message rather than raising exceptions
+
+**Example:**
+```python
+result = await list_design_versions(project_name="phone_stand")
+# Returns: {
+#   "status": "ok",
+#   "project_name": "phone_stand",
+#   "versions": [
+#     {"version_id": "abc123", "label": "v1.0", "timestamp": "2025-02-15T10:30:00", "files_count": 5},
+#     {"version_id": "def456", "label": "v1.1", "timestamp": "2025-02-15T11:00:00", "files_count": 6}
+#   ],
+#   "total_versions": 2,
+#   "message": "Retrieved 2 design versions"
+# }
+```
+
+---
+
+#### `backup_project(project_name: str) -> dict`
+Create a full backup of project files.
+
+Creates a timestamped backup of design/, model/, and print/ directories. Excludes backups/ and exports/ directories to prevent nested backups.
+
+**Parameters:**
+- `project_name` (str): Name of the project (non-empty)
+
+**Returns:** dict with keys:
+- `status` (str): "ok" or "error"
+- `project_name` (str): Project name (if status is "ok")
+- `backup_id` (str): UUID of the backup (if status is "ok")
+- `timestamp` (str): ISO-8601 timestamp (if status is "ok")
+- `files_backed_up` (int): Number of files in backup (if status is "ok")
+- `backup_path` (str): Path to backup directory (if status is "ok")
+- `message` (str): Info or error message
+
+**Error Handling:** Returns error dict with message rather than raising exceptions
+
+**Example:**
+```python
+result = await backup_project(project_name="phone_stand")
+# Returns: {
+#   "status": "ok",
+#   "project_name": "phone_stand",
+#   "backup_id": "550e8400-e29b-41d4-a716-446655440000",
+#   "timestamp": "2025-02-15T10:45:00",
+#   "files_backed_up": 15,
+#   "backup_path": "./projects/phone_stand/backups/550e8400-e29b-41d4-a716-446655440000",
+#   "message": "Backup created with 15 files"
+# }
+```
+
+---
+
+#### `export_project(project_name: str, export_format: str = "zip") -> dict`
+Export project as an archive file.
+
+Creates a zip archive of the project (excluding backups and exports directories).
+
+**Parameters:**
+- `project_name` (str): Name of the project (non-empty)
+- `export_format` (str): Export format - currently only "zip" supported (default: "zip")
+
+**Returns:** dict with keys:
+- `status` (str): "ok" or "error"
+- `project_name` (str): Project name (if status is "ok")
+- `export_path` (str): Path to exported file (if status is "ok")
+- `file_count` (int): Number of files in export (if status is "ok")
+- `size_bytes` (int): Size of exported file in bytes (if status is "ok")
+- `message` (str): Info or error message
+
+**Error Handling:** Returns error dict with message rather than raising exceptions
+
+**Example - Success:**
+```python
+result = await export_project(project_name="phone_stand", export_format="zip")
+# Returns: {
+#   "status": "ok",
+#   "project_name": "phone_stand",
+#   "export_path": "./projects/phone_stand/exports/phone_stand_20250215_104500.zip",
+#   "file_count": 20,
+#   "size_bytes": 50000,
+#   "message": "Project exported: 20 files, 50000 bytes"
+# }
+```
+
+**Example - Invalid Format:**
+```python
+result = await export_project(project_name="phone_stand", export_format="tar")
+# Returns: {
+#   "status": "error",
+#   "message": "Unsupported export format: tar. Only 'zip' is currently supported."
 # }
 ```
 

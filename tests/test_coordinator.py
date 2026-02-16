@@ -23,13 +23,13 @@ def test_coordinator_agent_has_correct_name():
     assert coordinator_agent.name == "coordinator_agent"
 
 
-def test_coordinator_agent_has_eight_tools():
-    """Test that coordinator agent has exactly eight tools."""
+def test_coordinator_agent_has_fourteen_tools():
+    """Test that coordinator agent has exactly fourteen tools."""
     os.environ["ANTHROPIC_API_KEY"] = "test_key"
 
     from src.agents.coordinator import coordinator_agent
 
-    assert len(coordinator_agent.tools) == 8
+    assert len(coordinator_agent.tools) == 14
 
 
 def test_coordinator_agent_uses_config_model():
