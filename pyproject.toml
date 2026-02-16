@@ -25,9 +25,8 @@ classifiers = [
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
-    "Topic :: Internet :: WWW/HTTP :: Indexing/Search",
     "Topic :: Scientific/Engineering :: Image Processing",
-    "Topic :: Multimedia :: Graphics :: 3D",
+    "Topic :: Multimedia :: Graphics",
 ]
 dependencies = [
     "google-adk",
