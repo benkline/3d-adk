@@ -1,0 +1,45 @@
+version: '3.9'
+
+services:
+  3d-adk:
+    # Build from local Dockerfile
+    build:
+      context: .
+      dockerfile: Dockerfile
+
+    # Container name for easy reference
+    container_name: 3d-adk-dev
+
+    # Interactive TTY for CLI
+    stdin_open: true
+    tty: true
+
+    # Load environment from .env file
+    env_file:
+      - .env
+
+    # Volume mounts for persistent data
+    volumes:
+      # Projects directory (stores design/model/print outputs)
+      - ./projects:/app/projects
+      # Sessions directory (stores project session state)
+      - ./sessions:/app/sessions
+
+    # Optional: Uncomment to specify network for OctoPrint integration
+    # networks:
+    #   - 3d-printing
+
+    # Optional: Resource limits (uncomment to enable)
+    # deploy:
+    #   resources:
+    #     limits:
+    #       cpus: '2'
+    #       memory: 2G
+    #     reservations:
+    #       cpus: '1'
+    #       memory: 1G
+
+# Optional: Define networks for multi-service setups (e.g., with OctoPrint)
+# networks:
+#   3d-printing:
+#     driver: bridge

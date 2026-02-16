@@ -1,0 +1,68 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "3d-adk"
+version = "0.1.0"
+description = "AI-Driven Mechanical Design Kit for 3D Printing"
+readme = "README.md"
+requires-python = ">=3.9"
+authors = [
+    {name = "3D-ADK Contributors"}
+]
+keywords = ["3d-printing", "ai", "design", "modeling", "openscad"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: MIT License",
+    "Natural Language :: English",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Image Processing",
+    "Topic :: Multimedia :: Graphics",
+]
+dependencies = [
+    "google-adk",
+    "anthropic",
+    "Pillow",
+    "requests",
+    "solidpython2",
+    "octorest",
+    "python-dotenv",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-asyncio>=0.21.0",
+    "build>=0.10.0",
+]
+
+[project.scripts]
+3d-adk = "src.main:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "/README.md",
+    "/requirements.txt",
+    "/src",
+    "/tests",
+    "/docs",
+    "/specs",
+    "/examples",
+    "/.env.example",
+    "/Dockerfile",
+    "/docker-compose.yml",
+    "/.dockerignore",
+    "/Makefile",
+]

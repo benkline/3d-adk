@@ -2619,3 +2619,192 @@ export OPENSCAD_OUTPUT_CACHE_ENABLED=false
 export OCTOPRINT_POLL_INTERVAL_S=0
 export METRICS_WINDOW_SIZE=0
 ```
+
+---
+
+## Deployment & Packaging
+
+3D-ADK is packaged for easy distribution and deployment via pip, Docker, and other standard Python deployment methods.
+
+### Python Package Installation
+
+The application is distributed as a standard Python package.
+
+#### Local Development Installation
+
+```bash
+# Install in editable mode with development dependencies
+pip install -e ".[dev]"
+
+# Verify installation
+3d-adk --version   # Should print "3d-adk 0.1.0"
+3d-adk --help      # Show CLI help
+```
+
+#### Production Installation
+
+```bash
+# Install from source
+pip install .
+
+# Verify
+3d-adk --version
+```
+
+#### Package Contents
+
+- **CLI Command:** `3d-adk` - Main entry point for interactive CLI
+- **Python Package:** `src.*` - All agents, tools, and services
+- **Configuration:** `.env` configuration file (copy `.env.example` and customize)
+- **Examples:** Pre-built example projects for reference
+
+### Docker Deployment
+
+Docker provides a containerized environment with all system dependencies pre-installed.
+
+#### Build Docker Image
+
+```bash
+# Build from Dockerfile
+docker build -t 3d-adk:latest .
+
+# Or use docker-compose
+docker-compose build
+```
+
+#### Run Container
+
+**Interactive Mode (with CLI):**
+```bash
+docker run -it --rm \
+  --env-file .env \
+  -v ./projects:/app/projects \
+  -v ./sessions:/app/sessions \
+  3d-adk:latest
+```
+
+**With Docker Compose (Recommended):**
+```bash
+# Configure
+cp config/docker.env.example .env
+# Edit .env with API keys
+
+# Run
+docker-compose up
+
+# Stop
+docker-compose down
+```
+
+**Run Specific Command:**
+```bash
+docker run --rm \
+  --env-file .env \
+  3d-adk:latest \
+  3d-adk --version
+```
+
+#### Docker Volume Mounts
+
+- **`./projects:/app/projects`** - Persistent design/model/print outputs
+- **`./sessions:/app/sessions`** - Persistent project session state
+- **`.env` file** - Configuration passed via `--env-file` flag
+
+#### System Dependencies in Docker
+
+The Dockerfile installs:
+- **openscad** - For 3D model rendering (required for Modeling phase)
+- **xvfb** - Virtual display for headless OpenSCAD rendering
+- **Python 3.11** - Programming language runtime
+- **All pip dependencies** - From `requirements.txt`
+
+### Configuration Templates
+
+Configuration templates are provided for different deployment scenarios:
+
+| Template | Usage | Notes |
+|----------|-------|-------|
+| `.env.example` | Development on local machine | Default OpenSCAD paths for macOS/Linux |
+| `config/docker.env.example` | Docker/docker-compose deployment | Pre-configured paths for Docker environment |
+
+### Building Distribution Artifacts
+
+Create pip-installable packages:
+
+```bash
+# Install build tools
+pip install build
+
+# Build wheel (.whl) and source (.tar.gz) distributions
+python -m build
+
+# Output in dist/ directory
+ls dist/          # 3d-adk-0.1.0-py3-none-any.whl
+                  # 3d-adk-0.1.0.tar.gz
+```
+
+### Using Makefile
+
+The included `Makefile` provides shortcuts for common tasks:
+
+```bash
+# Development
+make install        # Install in editable mode with dev dependencies
+make test          # Run test suite
+make test-cov      # Run tests with coverage report
+
+# Building
+make build         # Create distribution packages
+make clean         # Remove build artifacts
+make release       # Build and list release artifacts
+
+# Docker
+make docker-build  # Build Docker image
+make docker-run    # Run Docker container interactively
+make docker-test   # Run tests in Docker
+
+# Utilities
+make version       # Show application version
+make verify        # Test installation (install + run CLI)
+```
+
+### Environment Variables for Deployment
+
+**Required:**
+- `ANTHROPIC_API_KEY` - Claude API key from console.anthropic.com
+
+**Optional (with sensible defaults):**
+- `LLM_MODEL` - Claude model (default: claude-opus-4-6)
+- `OPENSCAD_PATH` - Path to openscad binary (default: /usr/local/bin/openscad)
+- `PROJECTS_DIR` - Output directory for designs/models (default: ./projects)
+- `SESSIONS_DIR` - Session state directory (default: ./sessions)
+- `OCTOPRINT_HOST` - OctoPrint hostname (default: localhost)
+- `OCTOPRINT_PORT` - OctoPrint port (default: 5000)
+- `OCTOPRINT_API_KEY` - OctoPrint API key (required if using Monitor phase)
+- `LOG_LEVEL` - Logging level (default: INFO)
+- `FILAMENT_COST_PER_KG` - Material cost for estimation (default: 25.0)
+- `FILAMENT_G_PER_HOUR` - Filament consumption for time estimation (default: 8.0)
+
+See [SETUP_GUIDE.md](SETUP_GUIDE.md#configuration) for detailed configuration documentation.
+
+### Troubleshooting Deployment
+
+**pip Installation Issues:**
+- Ensure Python 3.9+ is available
+- If google-adk fails to install, check system architecture
+- Use verbose mode for debugging: `pip install -v .`
+
+**Docker Build Fails:**
+- Check that `Dockerfile` and `pyproject.toml` are in project root
+- Ensure `.dockerignore` is present (prevents large context)
+- Rebuild without cache: `docker build --no-cache -t 3d-adk:latest .`
+
+**Docker Runtime Issues:**
+- Verify `.env` file exists and `ANTHROPIC_API_KEY` is set
+- Check volumes are mounted: `docker run --rm --env-file .env 3d-adk:latest ls -la /app/`
+- View logs: `docker-compose logs 3d-adk`
+
+**Command Not Found After pip Install:**
+- Verify installation: `pip show 3d-adk`
+- Check PATH includes pip's bin directory: `which 3d-adk`
+- Reinstall: `pip install --force-reinstall 3d-adk`
