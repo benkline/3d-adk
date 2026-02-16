@@ -2355,4 +2355,139 @@ Returns to the previous phase.
 #### `help`
 Displays the full list of available commands with usage examples.
 
+---
+
+## System Integration Testing (TICKET-027)
+
+Comprehensive end-to-end system integration tests verify the complete 3D printing workflow (design → modeling → monitor) operates correctly with proper phase transitions, data persistence, and error handling.
+
+**Test File:** `tests/test_system_integration.py`
+
+**Test Count:** 19 comprehensive tests organized into 4 test classes plus 2 standalone agent structure tests
+
+### Test Classes
+
+#### 1. TestFullSystemPipeline (3 tests)
+Tests the complete coordinator workflow end-to-end.
+
+**Tests:**
+- `test_complete_workflow_design_to_monitor` — Verifies complete pipeline: session creation → design approval → phase advance to modeling → model export → phase advance to monitor
+- `test_state_flags_gate_phase_transitions` — Validates that state flags prevent invalid transitions (cannot advance design→modeling without approval, cannot advance modeling→monitor without export)
+- `test_full_pipeline_phase_sequence` — Confirms phases transition in exact sequence with correct state at each checkpoint
+
+**Key Validations:**
+- Phase transitions follow design → modeling → monitor order
+- State flags gate transitions correctly
+- Final phase cannot advance further
+
+#### 2. TestCrossAgentDataFlow (4 tests)
+Tests that data created in one phase persists and remains accessible across all phases.
+
+**Tests:**
+- `test_project_directories_created_on_session_start` — Verifies project directory structure (design/, model/, print/) created automatically
+- `test_design_files_persist_after_phase_advance` — Confirms files in design/ directory remain after advancing to modeling
+- `test_design_version_preserved_across_phases` — Validates design version snapshots persist through phase transitions
+- `test_data_integrity_through_full_pipeline` — Full end-to-end test of data preservation through all phases
+
+**Key Validations:**
+- File I/O works correctly across phases
+- Version history maintained through phase transitions
+- No data loss on phase advancement
+
+#### 3. TestErrorRecoveryAndHandling (6 tests)
+Tests that the system handles errors gracefully at phase boundaries.
+
+**Tests:**
+- `test_advance_without_design_approval_returns_error` — Blocks design→modeling transition without approval flag
+- `test_advance_without_model_export_returns_error` — Blocks modeling→monitor transition without export flag
+- `test_advance_beyond_monitor_returns_error` — Prevents advancement beyond final phase
+- `test_backtrack_from_design_returns_error` — Prevents backtrack from initial design phase
+- `test_backtrack_from_monitor_after_print_started_returns_error` — Blocks backtrack when print has started
+- `test_invalid_session_id_returns_error` — Returns error for nonexistent sessions
+
+**Key Validations:**
+- All error cases return proper error dicts with messages
+- No exceptions raised on invalid operations
+- Guard conditions properly enforce phase rules
+
+#### 4. TestStatePersistenceAndRecovery (4 tests)
+Tests session persistence across simulated service restarts.
+
+**Tests:**
+- `test_session_state_survives_service_restart` — Verifies design_approved flag persists after service restart simulation
+- `test_phase_advancement_survives_restart` — Confirms current_phase persists after service restart
+- `test_full_pipeline_restart_mid_workflow` — Complete workflow with mid-pipeline restart and recovery
+- `test_backtrack_then_advance_preserves_data` — State consistency verified after backtrack/re-advance cycle
+
+**Key Validations:**
+- Session state persists to disk correctly
+- Service restart (new ProjectSessionService instance) reloads state
+- Data integrity maintained through service restart cycles
+
+### Standalone Tests (2 tests)
+
+- `test_coordinator_agent_has_fourteen_tools` — Verifies coordinator agent has exactly 14 FunctionTool-wrapped tools
+- `test_coordinator_agent_has_three_sub_agents` — Confirms coordinator has exactly 3 sub-agents (design, modeling, monitor)
+
+### Running the Tests
+
+**Run only system integration tests:**
+```bash
+python -m pytest tests/test_system_integration.py -v
+```
+
+**Run with verbose output:**
+```bash
+python -m pytest tests/test_system_integration.py -vv
+```
+
+**Run specific test class:**
+```bash
+python -m pytest tests/test_system_integration.py::TestFullSystemPipeline -v
+```
+
+**Run specific test:**
+```bash
+python -m pytest tests/test_system_integration.py::TestFullSystemPipeline::test_complete_workflow_design_to_monitor -v
+```
+
+### Test Scenario
+
+All tests simulate the complete design-to-print workflow:
+
+```
+1. Create project session (design phase)
+2. Conduct design interview (simulated)
+3. Generate sketches and images (simulated)
+4. Create blueprint and specifications (simulated)
+5. Approve design (sets design_approved flag)
+6. Advance to modeling phase
+7. Generate OpenSCAD code (simulated)
+8. Export STL/3MF models (simulated)
+9. Mark model as exported (sets model_exported flag)
+10. Advance to monitor phase
+11. Simulate OctoPrint monitoring (simulated)
+12. Detect print issues (simulated)
+13. Record quality assessment (simulated)
+14. Complete print and archive (simulated)
+```
+
+### Key Test Patterns
+
+1. **Fixture isolation:** Uses `tmp_projects_dir` and `mock_sessions_dir` fixtures with monkeypatching to prevent test data leakage
+2. **Async tools:** All coordinator tool tests use `@pytest.mark.asyncio` decorator
+3. **State validation:** Tests verify complete state dicts are returned from coordinator tools
+4. **Error handling:** All error cases return proper `{"status": "error", "message": "..."}` dicts
+5. **Persistence:** Service restart simulation creates new `ProjectSessionService()` instances to verify disk persistence
+
+### Test Coverage
+
+- **Full pipeline:** 3 tests covering complete design→modeling→monitor workflow
+- **Data flow:** 4 tests validating file persistence across phases
+- **Error cases:** 6 tests covering all invalid operations
+- **Persistence:** 4 tests validating session recovery and restarts
+- **Agent structure:** 2 tests validating coordinator agent setup
+
+**Total Coverage:** 19 comprehensive system integration tests
+
 **Implementation details:** See spec files in `specs/` folder
