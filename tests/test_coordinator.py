@@ -23,13 +23,13 @@ def test_coordinator_agent_has_correct_name():
     assert coordinator_agent.name == "coordinator_agent"
 
 
-def test_coordinator_agent_has_five_tools():
-    """Test that coordinator agent has exactly five tools."""
+def test_coordinator_agent_has_eight_tools():
+    """Test that coordinator agent has exactly eight tools."""
     os.environ["ANTHROPIC_API_KEY"] = "test_key"
 
     from src.agents.coordinator import coordinator_agent
 
-    assert len(coordinator_agent.tools) == 5
+    assert len(coordinator_agent.tools) == 8
 
 
 def test_coordinator_agent_uses_config_model():
@@ -219,3 +219,211 @@ async def test_advance_phase_with_approval():
     assert result["status"] == "ok"
     assert result["previous_phase"] == "design"
     assert result["current_phase"] == "modeling"
+
+
+# Tests for state management tools (TICKET-024)
+@pytest.mark.asyncio
+async def test_approve_design_sets_flag():
+    """Test that approve_design sets design_approved flag in session."""
+    os.environ["ANTHROPIC_API_KEY"] = "test_key"
+
+    from src.tools.coordinator_tools import create_project_session, approve_design, get_project_status
+
+    # Create a project
+    create_result = await create_project_session(project_name="test_approve_design")
+    session_id = create_result["session_id"]
+
+    # Call approve_design
+    result = await approve_design(session_id=session_id)
+
+    assert isinstance(result, dict)
+    assert result["status"] == "ok"
+    assert result["design_approved"] is True
+
+    # Verify flag persisted by checking status
+    status_result = await get_project_status(session_id=session_id)
+    assert status_result["design_approved"] is True
+
+
+@pytest.mark.asyncio
+async def test_approve_design_enables_advance_to_modeling():
+    """Test that approve_design enables transition from design to modeling."""
+    os.environ["ANTHROPIC_API_KEY"] = "test_key"
+
+    from src.tools.coordinator_tools import (
+        create_project_session,
+        approve_design,
+        advance_phase,
+    )
+
+    # Create a project
+    create_result = await create_project_session(project_name="test_approve_advance")
+    session_id = create_result["session_id"]
+
+    # Approve design
+    await approve_design(session_id=session_id)
+
+    # Now advance should work
+    result = await advance_phase(session_id=session_id)
+
+    assert result["status"] == "ok"
+    assert result["current_phase"] == "modeling"
+
+
+@pytest.mark.asyncio
+async def test_mark_model_exported_sets_flag():
+    """Test that mark_model_exported sets model_exported flag in session."""
+    os.environ["ANTHROPIC_API_KEY"] = "test_key"
+
+    from src.tools.coordinator_tools import (
+        create_project_session,
+        mark_model_exported,
+        get_project_status,
+    )
+
+    # Create and advance to modeling phase
+    create_result = await create_project_session(project_name="test_mark_exported")
+    session_id = create_result["session_id"]
+
+    # Mark model as exported
+    result = await mark_model_exported(session_id=session_id)
+
+    assert isinstance(result, dict)
+    assert result["status"] == "ok"
+    assert result["model_exported"] is True
+
+    # Verify flag persisted
+    status_result = await get_project_status(session_id=session_id)
+    assert status_result["model_exported"] is True
+
+
+@pytest.mark.asyncio
+async def test_mark_model_exported_enables_advance_to_monitor():
+    """Test that mark_model_exported enables transition to monitor phase."""
+    os.environ["ANTHROPIC_API_KEY"] = "test_key"
+
+    from src.tools.coordinator_tools import (
+        create_project_session,
+        approve_design,
+        advance_phase,
+        mark_model_exported,
+    )
+
+    # Create a project
+    create_result = await create_project_session(project_name="test_export_advance")
+    session_id = create_result["session_id"]
+
+    # Go through full transition: design -> modeling -> monitor
+    await approve_design(session_id=session_id)
+    await advance_phase(session_id=session_id)  # Now in modeling
+    await mark_model_exported(session_id=session_id)
+    result = await advance_phase(session_id=session_id)
+
+    assert result["status"] == "ok"
+    assert result["current_phase"] == "monitor"
+
+
+@pytest.mark.asyncio
+async def test_mark_print_started_sets_flag():
+    """Test that mark_print_started sets print_started flag in session."""
+    os.environ["ANTHROPIC_API_KEY"] = "test_key"
+
+    from src.tools.coordinator_tools import (
+        create_project_session,
+        mark_print_started,
+        get_project_status,
+    )
+
+    # Create a project
+    create_result = await create_project_session(project_name="test_print_started")
+    session_id = create_result["session_id"]
+
+    # Mark print as started
+    result = await mark_print_started(session_id=session_id)
+
+    assert isinstance(result, dict)
+    assert result["status"] == "ok"
+    assert result["print_started"] is True
+
+    # Verify flag persisted
+    status_result = await get_project_status(session_id=session_id)
+    assert status_result["print_started"] is True
+
+
+@pytest.mark.asyncio
+async def test_mark_print_started_prevents_backtrack():
+    """Test that print_started=True prevents backtrack from monitor."""
+    os.environ["ANTHROPIC_API_KEY"] = "test_key"
+
+    from src.tools.coordinator_tools import (
+        create_project_session,
+        approve_design,
+        advance_phase,
+        mark_model_exported,
+        mark_print_started,
+        backtrack_phase,
+    )
+
+    # Create project and advance to monitor
+    create_result = await create_project_session(project_name="test_no_backtrack")
+    session_id = create_result["session_id"]
+
+    await approve_design(session_id=session_id)
+    await advance_phase(session_id=session_id)
+    await mark_model_exported(session_id=session_id)
+    await advance_phase(session_id=session_id)  # Now in monitor
+
+    # Mark print as started
+    await mark_print_started(session_id=session_id)
+
+    # Try to backtrack - should fail
+    result = await backtrack_phase(session_id=session_id)
+
+    assert result["status"] == "error"
+    assert "print has already started" in result["message"]
+
+
+@pytest.mark.asyncio
+async def test_state_persists_across_service_restart():
+    """Test that state flags survive a service restart."""
+    os.environ["ANTHROPIC_API_KEY"] = "test_key"
+
+    from src.tools.coordinator_tools import (
+        create_project_session,
+        approve_design,
+        get_project_status,
+    )
+
+    # Create a project and approve design
+    create_result = await create_project_session(project_name="test_persistence")
+    session_id = create_result["session_id"]
+
+    await approve_design(session_id=session_id)
+
+    # Simulate restart by creating a new service instance
+    from src.services.sessions import ProjectSessionService
+    new_service = ProjectSessionService()
+
+    # Get the session through the new service
+    session = await new_service.get_session(
+        app_name="3d-adk",
+        user_id="default",
+        session_id=session_id,
+    )
+
+    # Verify the flag survived
+    assert session.state.get("design_approved") is True
+
+
+@pytest.mark.asyncio
+async def test_approve_design_with_invalid_session_id():
+    """Test that approve_design returns error for invalid session."""
+    os.environ["ANTHROPIC_API_KEY"] = "test_key"
+
+    from src.tools.coordinator_tools import approve_design
+
+    result = await approve_design(session_id="invalid_session_id")
+
+    assert isinstance(result, dict)
+    assert result["status"] == "error"
+    assert "message" in result

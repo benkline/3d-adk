@@ -83,6 +83,42 @@ async def update_project_phase(session_id: str, phase: str) -> Session:
     return session
 
 
+async def update_project_state(session_id: str, state_updates: dict) -> Session:
+    """Update arbitrary fields in the project session state.
+
+    Args:
+        session_id: Session ID to update
+        state_updates: Dict of state fields to update (e.g., {"design_approved": True})
+
+    Returns:
+        Updated Session object
+
+    Raises:
+        ValueError: If session not found
+    """
+    session = await get_project(session_id)
+    if not session:
+        raise ValueError(f"Session {session_id} not found")
+
+    # Merge updates into state
+    session.state.update(state_updates)
+    session.state["updated_at"] = datetime.utcnow().isoformat()
+
+    # Re-persist to disk
+    session_file = _service._get_session_file_path(APP_NAME, USER_ID, session_id)
+    session_data = {
+        "id": session.id,
+        "app_name": session.app_name,
+        "user_id": session.user_id,
+        "state": session.state,
+        "events": session.events,
+        "last_update_time": session.last_update_time,
+    }
+    _service._save_session_to_file(session_file, session_data)
+
+    return session
+
+
 async def list_projects() -> list[Session]:
     """List all projects for the current user.
 

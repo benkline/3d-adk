@@ -7,6 +7,7 @@ from src.session import (
     create_project,
     get_project,
     update_project_phase,
+    update_project_state,
     list_projects,
 )
 
@@ -339,4 +340,169 @@ async def backtrack_phase(session_id: str) -> dict:
         return {
             "status": "error",
             "message": f"Failed to backtrack phase: {str(e)}"
+        }
+
+
+async def approve_design(session_id: str) -> dict:
+    """Approve the design and mark as ready for modeling phase.
+
+    Sets design_approved = True in the session state, enabling the design → modeling transition.
+
+    Args:
+        session_id: Session ID to update
+
+    Returns:
+        dict with keys:
+        - status: "ok" or "error"
+        - session_id: Session ID
+        - design_approved: Whether design is now approved (True on success)
+        - message: Info or error message
+
+    Error Handling:
+        Returns error dict with message rather than raising exceptions
+    """
+    # Validate input
+    if not session_id or not isinstance(session_id, str):
+        logger.warning("approve_design called with invalid session_id")
+        return {
+            "status": "error",
+            "message": "session_id is required and must be a non-empty string"
+        }
+
+    try:
+        session = await get_project(session_id)
+
+        if not session:
+            logger.warning(f"Session not found: {session_id}")
+            return {
+                "status": "error",
+                "message": f"Session {session_id} not found"
+            }
+
+        # Update session state
+        await update_project_state(session_id, {"design_approved": True})
+        logger.info(f"Design approved for project {session_id}")
+
+        return {
+            "status": "ok",
+            "session_id": session_id,
+            "design_approved": True,
+            "message": "Design successfully approved"
+        }
+
+    except Exception as e:
+        logger.error(f"Error approving design: {str(e)}")
+        return {
+            "status": "error",
+            "message": f"Failed to approve design: {str(e)}"
+        }
+
+
+async def mark_model_exported(session_id: str) -> dict:
+    """Mark the model as exported and ready for printing phase.
+
+    Sets model_exported = True in the session state, enabling the modeling → monitor transition.
+
+    Args:
+        session_id: Session ID to update
+
+    Returns:
+        dict with keys:
+        - status: "ok" or "error"
+        - session_id: Session ID
+        - model_exported: Whether model is now exported (True on success)
+        - message: Info or error message
+
+    Error Handling:
+        Returns error dict with message rather than raising exceptions
+    """
+    # Validate input
+    if not session_id or not isinstance(session_id, str):
+        logger.warning("mark_model_exported called with invalid session_id")
+        return {
+            "status": "error",
+            "message": "session_id is required and must be a non-empty string"
+        }
+
+    try:
+        session = await get_project(session_id)
+
+        if not session:
+            logger.warning(f"Session not found: {session_id}")
+            return {
+                "status": "error",
+                "message": f"Session {session_id} not found"
+            }
+
+        # Update session state
+        await update_project_state(session_id, {"model_exported": True})
+        logger.info(f"Model marked as exported for project {session_id}")
+
+        return {
+            "status": "ok",
+            "session_id": session_id,
+            "model_exported": True,
+            "message": "Model successfully marked as exported"
+        }
+
+    except Exception as e:
+        logger.error(f"Error marking model exported: {str(e)}")
+        return {
+            "status": "error",
+            "message": f"Failed to mark model as exported: {str(e)}"
+        }
+
+
+async def mark_print_started(session_id: str) -> dict:
+    """Mark the print as started to prevent backtracking from monitor phase.
+
+    Sets print_started = True in the session state, preventing backtrack from monitor → modeling.
+
+    Args:
+        session_id: Session ID to update
+
+    Returns:
+        dict with keys:
+        - status: "ok" or "error"
+        - session_id: Session ID
+        - print_started: Whether print is now marked as started (True on success)
+        - message: Info or error message
+
+    Error Handling:
+        Returns error dict with message rather than raising exceptions
+    """
+    # Validate input
+    if not session_id or not isinstance(session_id, str):
+        logger.warning("mark_print_started called with invalid session_id")
+        return {
+            "status": "error",
+            "message": "session_id is required and must be a non-empty string"
+        }
+
+    try:
+        session = await get_project(session_id)
+
+        if not session:
+            logger.warning(f"Session not found: {session_id}")
+            return {
+                "status": "error",
+                "message": f"Session {session_id} not found"
+            }
+
+        # Update session state
+        await update_project_state(session_id, {"print_started": True})
+        logger.info(f"Print marked as started for project {session_id}")
+
+        return {
+            "status": "ok",
+            "session_id": session_id,
+            "print_started": True,
+            "message": "Print successfully marked as started"
+        }
+
+    except Exception as e:
+        logger.error(f"Error marking print started: {str(e)}")
+        return {
+            "status": "error",
+            "message": f"Failed to mark print as started: {str(e)}"
         }
