@@ -3,13 +3,21 @@
 import json
 import logging
 import os
+import threading
 import time
 from pathlib import Path
 from typing import Optional
 
 from octorest import OctoRest
 
-from src.config import OCTOPRINT_HOST, OCTOPRINT_PORT, OCTOPRINT_API_KEY, FILAMENT_COST_PER_KG
+from src.config import (
+    OCTOPRINT_HOST,
+    OCTOPRINT_PORT,
+    OCTOPRINT_API_KEY,
+    FILAMENT_COST_PER_KG,
+    OCTOPRINT_POLL_INTERVAL_S,
+    METRICS_WINDOW_SIZE,
+)
 
 # Project directory for storing metrics (patchable in tests)
 PROJECTS_DIR = os.getenv("PROJECTS_DIR", "./projects")
@@ -24,6 +32,53 @@ LAYER_SHIFT_THRESHOLD_MM = float(os.getenv("LAYER_SHIFT_THRESHOLD_MM", "5.0"))
 FILAMENT_G_PER_HOUR = float(os.getenv("FILAMENT_G_PER_HOUR", "8.0"))
 
 logger = logging.getLogger(__name__)
+
+# Module-level rate limiter for OctoPrint polling (TICKET-029 optimization)
+_poll_lock = threading.Lock()
+_last_poll_time: float = 0.0
+
+
+def _enforce_poll_rate() -> None:
+    """Enforce minimum time between OctoPrint API calls.
+
+    Sleeps if necessary to maintain OCTOPRINT_POLL_INTERVAL_S between calls.
+    Uses module-level timestamp and lock for thread-safe rate limiting.
+    """
+    global _last_poll_time
+    with _poll_lock:
+        now = time.monotonic()
+        elapsed = now - _last_poll_time
+        if elapsed < OCTOPRINT_POLL_INTERVAL_S:
+            sleep_time = OCTOPRINT_POLL_INTERVAL_S - elapsed
+            time.sleep(sleep_time)
+        _last_poll_time = time.monotonic()
+
+
+# Module-level client cache (TICKET-029 optimization)
+_octoprint_client: Optional["OctoPrintClient"] = None
+_octoprint_client_params: tuple = ()
+
+
+def _get_cached_client(host: str, port: int, api_key: str) -> "OctoPrintClient":
+    """Get or create a cached OctoPrintClient instance.
+
+    Reuses the same client instance across multiple calls if parameters haven't
+    changed, reducing connection overhead. Creates a new client if parameters differ.
+
+    Args:
+        host: OctoPrint server hostname/IP
+        port: OctoPrint server port
+        api_key: OctoPrint API key
+
+    Returns:
+        OctoPrintClient instance (reused or newly created)
+    """
+    global _octoprint_client, _octoprint_client_params
+    params = (host, port, api_key)
+    if _octoprint_client is None or _octoprint_client_params != params:
+        _octoprint_client = OctoPrintClient(host, int(port), api_key)
+        _octoprint_client_params = params
+    return _octoprint_client
 
 
 class OctoPrintClient:
@@ -281,7 +336,7 @@ def test_connection(host: str = "", port: str = "", api_key: str = "") -> dict:
         }
 
     try:
-        client = OctoPrintClient(final_host, final_port, final_api_key)
+        client = _get_cached_client(final_host, final_port, final_api_key)
         result = client.test_connection()
         if result["status"] == "ok":
             logger.info(f"test_connection: successfully connected to {final_host}:{final_port}")
@@ -336,7 +391,10 @@ def get_printer_status(host: str = "", port: str = "", api_key: str = "") -> dic
         }
 
     try:
-        client = OctoPrintClient(final_host, final_port, final_api_key)
+        # Enforce minimum polling interval (TICKET-029 optimization)
+        _enforce_poll_rate()
+
+        client = _get_cached_client(final_host, final_port, final_api_key)
         result = client.get_printer_status()
         logger.info(f"get_printer_status: retrieved status - {result.get('state', 'unknown')}")
         return result
@@ -388,7 +446,10 @@ def get_job_status(host: str = "", port: str = "", api_key: str = "") -> dict:
         }
 
     try:
-        client = OctoPrintClient(final_host, final_port, final_api_key)
+        # Enforce minimum polling interval (TICKET-029 optimization)
+        _enforce_poll_rate()
+
+        client = _get_cached_client(final_host, final_port, final_api_key)
         result = client.get_job_status()
         logger.info(f"get_job_status: retrieved status - {result.get('state', 'no active job')}")
         return result
@@ -605,6 +666,40 @@ def _detect_layer_shift(snapshots: list) -> list:
     return issues
 
 
+def _load_recent_snapshots(metrics_file: Path, window: int = 0) -> list:
+    """Load the last N snapshots from a JSONL metrics file.
+
+    Uses a deque for O(1) windowing without reading all data into a list.
+    This ensures memory usage is bounded even for multi-hour print jobs.
+
+    Args:
+        metrics_file: Path to metrics.jsonl file
+        window: Maximum snapshots to load (0 = load all, default uses METRICS_WINDOW_SIZE)
+
+    Returns:
+        list of snapshot dicts, up to `window` entries in size
+    """
+    from collections import deque
+
+    effective_window = window if window > 0 else METRICS_WINDOW_SIZE
+    buf = deque(maxlen=effective_window)
+
+    if not metrics_file.exists():
+        return []
+
+    with open(metrics_file) as f:
+        for line_num, line in enumerate(f, 1):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                buf.append(json.loads(line))
+            except json.JSONDecodeError:
+                logger.warning(f"_load_recent_snapshots: skipping malformed line {line_num} in {metrics_file}")
+
+    return list(buf)
+
+
 async def detect_print_issues(project_name: str, metrics_path: Optional[str] = None) -> dict:
     """Analyze collected metrics to detect print issues.
 
@@ -639,19 +734,13 @@ async def detect_print_issues(project_name: str, metrics_path: Optional[str] = N
             "message": "No metrics available for analysis"
         }
 
-    # Parse JSONL metrics
-    snapshots = []
+    # Load recent snapshots (TICKET-029 optimization: windowed memory usage)
     try:
-        with open(metrics_file) as f:
-            for line_num, line in enumerate(f, 1):
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    snapshots.append(json.loads(line))
-                except json.JSONDecodeError:
-                    logger.warning(f"detect_print_issues: skipping malformed line {line_num} in {metrics_file}")
-                    continue
+        snapshots = _load_recent_snapshots(metrics_file)
+        if not snapshots:
+            logger.info(f"detect_print_issues: no snapshots loaded from {metrics_file}")
+        else:
+            logger.info(f"detect_print_issues: loaded {len(snapshots)} snapshots (window: {METRICS_WINDOW_SIZE})")
     except Exception as e:
         logger.error(f"detect_print_issues: error reading metrics file: {str(e)}", exc_info=True)
         return {
@@ -1306,18 +1395,8 @@ async def generate_print_summary(project_name: str) -> dict:
         interventions_file = monitor_dir / "interventions.json"
         qa_file = monitor_dir / "quality_assessment.json"
 
-        # Load metrics
-        snapshots = []
-        if metrics_file.exists():
-            with open(metrics_file) as f:
-                for line_num, line in enumerate(f, 1):
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        snapshots.append(json.loads(line))
-                    except json.JSONDecodeError:
-                        logger.warning(f"generate_print_summary: skipping malformed metrics line {line_num}")
+        # Load recent snapshots (TICKET-029 optimization: windowed memory usage)
+        snapshots = _load_recent_snapshots(metrics_file)
 
         # Load alerts, interventions, quality assessment
         alerts = _load_alerts(alerts_file)
