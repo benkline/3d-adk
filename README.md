@@ -194,41 +194,51 @@ See [tickets.md](tickets.md) for complete list.
 Create `.env` file based on `.env.example`:
 
 ```env
-# API Keys
-ANTHROPIC_API_KEY=sk-...
-OPENAI_API_KEY=sk-...  # Optional, if using other image APIs
+# Required: Claude API Key
+ANTHROPIC_API_KEY=sk-ant-...
 
-# OctoPrint Configuration
-OCTOPRINT_HOST=localhost
-OCTOPRINT_PORT=5000
-OCTOPRINT_API_KEY=your_api_key
-
-# Image Generation
-IMAGE_API_PROVIDER=anthropic  # or openai, stability, etc.
-
-# Model Selection
+# Model Selection (default: claude-opus-4-6)
 LLM_MODEL=claude-opus-4-6
+
+# OpenSCAD Path (required for modeling phase)
+OPENSCAD_PATH=/usr/local/bin/openscad
+
+# OctoPrint Configuration (required for monitor phase)
+OCTOPRINT_HOST=192.168.1.100
+OCTOPRINT_PORT=5000
+OCTOPRINT_API_KEY=your_octoprint_api_key
+
+# Optional Configuration
+LOG_LEVEL=INFO
+PROJECTS_DIR=./projects
+SESSIONS_DIR=./sessions
+FILAMENT_COST_PER_KG=25.0
+FILAMENT_G_PER_HOUR=8.0
 ```
+
+**Note:** OpenSCAD path varies by platform. Find it with `which openscad` after installation.
 
 ## 📊 Project Status
 
-Currently in **Phase 0: Infrastructure** setup.
+**Phase 5: Polish & Deployment** - In progress
 
 ### Completed
-- ✅ Project plan and system architecture
-- ✅ Comprehensive specifications
-- ✅ Implementation tickets
-- ✅ Virtual environment
+- ✅ **Phase 0**: Infrastructure & Foundation (2 tickets)
+- ✅ **Phase 1**: Design Agent Implementation (6 tickets)
+- ✅ **Phase 2**: Modeling Agent Implementation (6 tickets)
+- ✅ **Phase 3**: Monitor Agent Implementation (7 tickets)
+- ✅ **Phase 4**: Coordinator Agent & Integration (5 tickets)
 
 ### In Progress
-- 🔄 Infrastructure setup (TICKET-001, TICKET-002)
+- 🔄 **Phase 5**: Documentation & Examples (TICKET-028)
+- 🔄 Performance Optimization (TICKET-029)
+- 🔄 Deployment & Packaging (TICKET-030)
+- 🔄 Quality Assurance (TICKET-031)
 
-### Coming Soon
-- Design Agent (Phase 1)
-- Modeling Agent (Phase 2)
-- Monitor Agent (Phase 3)
-- System Integration (Phase 4)
-- Polish & Deployment (Phase 5)
+### Test Coverage
+- **318 tests passing** across all phases
+- >80% code coverage
+- Full end-to-end integration tests
 
 ## 🤝 Architecture Highlights
 
@@ -291,6 +301,6 @@ See [TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) for common issues and solution
 
 ---
 
-**Last Updated**: February 14, 2026
+**Last Updated**: February 15, 2026
 
 For the latest information, see [ARCHITECTURE.md](docs/ARCHITECTURE.md) and [tickets.md](tickets.md).

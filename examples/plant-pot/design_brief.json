@@ -1,0 +1,27 @@
+{
+  "object_name": "Small Succulent Pot",
+  "purpose": "Plant container for succulents and small herbs",
+  "dimensions": {
+    "width_mm": 70,
+    "depth_mm": 70,
+    "height_mm": 60
+  },
+  "materials": [
+    "PLA"
+  ],
+  "aesthetics": "Modern, minimalist",
+  "constraints": [
+    "Drainage holes required for plant health",
+    "Lightweight for moving",
+    "Simple geometry for print reliability"
+  ],
+  "special_requirements": [
+    "3-4 drainage holes at bottom",
+    "Smooth interior for root growth",
+    "Stackable if possible"
+  ],
+  "budget_estimate": "Low",
+  "use_case": "Home decoration, plant care",
+  "audience": "Plant lovers, interior decorators",
+  "design_style": "Modern, minimalist, Scandinavian"
+}
