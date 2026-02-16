@@ -1,0 +1,53 @@
+# Git
+.git
+.gitignore
+
+# Environment files (will be provided at runtime)
+.env
+.env.local
+
+# Test files and coverage
+tests/
+.pytest_cache
+.coverage
+htmlcov/
+coverage.xml
+
+# Development specs
+specs/
+
+# Runtime directories (will be created fresh in container)
+sessions/
+projects/
+
+# Python build artifacts
+dist/
+build/
+*.egg-info/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+.Cython_Build
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Documentation build
+docs/_build/
+
+# CI/CD
+.github/
+.gitlab-ci.yml
+.travis.yml
+
+# Configuration files we don't need in image
+.pre-commit-config.yaml
+pyproject.toml.bak

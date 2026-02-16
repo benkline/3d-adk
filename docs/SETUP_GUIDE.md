@@ -179,6 +179,111 @@ If Monitor phase tools return "Cannot connect to OctoPrint":
 2. Verify `OCTOPRINT_API_KEY` is correct (generate a new one in OctoPrint web settings if needed)
 3. Check firewall rules allow connection to the OctoPrint port
 
+## Docker Deployment
+
+For containerized deployment or if you prefer not to install dependencies locally, you can use Docker Compose.
+
+### Prerequisites
+
+- **Docker:** Version 20.10 or later
+- **Docker Compose:** Version 1.29 or later
+- **.env file:** Configuration file with required API keys
+
+### Quick Start with Docker
+
+1. **Configure Environment**
+
+   ```bash
+   cp config/docker.env.example .env
+   ```
+
+   Edit `.env` and fill in:
+   - `ANTHROPIC_API_KEY` (required)
+   - `OCTOPRINT_HOST`, `OCTOPRINT_PORT`, `OCTOPRINT_API_KEY` (if using Monitor phase)
+
+2. **Build and Run**
+
+   ```bash
+   docker-compose up
+   ```
+
+   Or for non-interactive background run:
+   ```bash
+   docker-compose up -d
+   ```
+
+3. **Access the Application**
+
+   The interactive CLI will start automatically. Type `help` for available commands.
+
+### Docker Volumes
+
+The Docker setup creates persistent volumes for:
+
+- **`./projects:/app/projects`** - Design, model, and print outputs persist on your host
+- **`./sessions:/app/sessions`** - Project session state persists on your host
+
+Files created inside the container are automatically available on your host.
+
+### Docker Compose Commands
+
+```bash
+# Start container
+docker-compose up
+
+# Start in background
+docker-compose up -d
+
+# Stop container
+docker-compose down
+
+# View logs
+docker-compose logs -f 3d-adk
+
+# Run specific command
+docker-compose exec 3d-adk 3d-adk --version
+
+# Run tests in container
+docker-compose exec 3d-adk pytest tests/
+```
+
+### Manual Docker Build and Run
+
+If you prefer to manage Docker directly without docker-compose:
+
+```bash
+# Build image
+docker build -t 3d-adk:latest .
+
+# Run with interactive CLI
+docker run -it --rm \
+  --env-file .env \
+  -v ./projects:/app/projects \
+  -v ./sessions:/app/sessions \
+  3d-adk:latest
+
+# Run specific command
+docker run --rm \
+  --env-file .env \
+  3d-adk:latest \
+  3d-adk --version
+```
+
+### Docker Troubleshooting
+
+**OpenSCAD not found in container**
+- The Docker image includes OpenSCAD. If you see "openscad: command not found", the Docker image may not have built properly.
+- Rebuild with: `docker-compose build --no-cache`
+
+**Projects/sessions not persisting**
+- Ensure volumes are mounted correctly in `docker-compose.yml`
+- Check that `./projects` and `./sessions` directories exist on your host
+- Verify file permissions: `ls -la projects/ sessions/`
+
+**Container exits immediately**
+- Check logs: `docker-compose logs 3d-adk`
+- Ensure `.env` file exists and `ANTHROPIC_API_KEY` is set
+
 ## Running the Application
 
 ### Interactive Mode (Default)

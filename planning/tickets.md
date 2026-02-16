@@ -1043,7 +1043,7 @@ Design phone stand → Generate blueprints → Model in OpenSCAD → Export STL 
 ## PHASE 5: Polish & Deployment
 
 ### TICKET-028: Documentation & Examples
-**Status:** TODO
+**Status:** DONE
 **Priority:** P2
 **Phase:** Polish
 **Depends on:** TICKET-027
@@ -1052,18 +1052,18 @@ Design phone stand → Generate blueprints → Model in OpenSCAD → Export STL 
 Create comprehensive documentation and usage examples.
 
 **Tasks:**
-- [ ] Write API documentation for each agent
-- [ ] Create user guide and tutorials
-- [ ] Build example projects (3-5 designs)
-- [ ] Document configuration options
-- [ ] Create troubleshooting guide
-- [ ] Update relevant documentation in `docs/API_REFERENCE.md`
+- [x] Write API documentation for each agent
+- [x] Create user guide and tutorials
+- [x] Build example projects (3-5 designs)
+- [x] Document configuration options
+- [x] Create troubleshooting guide
+- [x] Update relevant documentation in `docs/API_REFERENCE.md`
 
 **Acceptance Criteria:**
-- All public APIs documented
-- User guide covers all workflows
-- Examples run successfully
-- Configuration documented
+- ✅ All public APIs documented
+- ✅ User guide covers all workflows
+- ✅ Examples run successfully
+- ✅ Configuration documented
 
 ---
 
@@ -1105,7 +1105,7 @@ Profile and optimize system performance.
 ---
 
 ### TICKET-030: Deployment & Packaging
-**Status:** TODO
+**Status:** DONE
 **Priority:** P2
 **Phase:** Polish
 **Depends on:** TICKET-029
@@ -1114,18 +1114,30 @@ Profile and optimize system performance.
 Package system for deployment and distribution.
 
 **Tasks:**
-- [ ] Create Docker container
-- [ ] Build Python package distribution
-- [ ] Write installation guide
-- [ ] Create configuration templates
-- [ ] Build release artifacts
-- [ ] Update relevant documentation in `docs/API_REFERENCE.md`
+- [x] Create Docker container (`Dockerfile`, `.dockerignore`)
+- [x] Build Python package distribution (`pyproject.toml`)
+- [x] Write installation guide (updated `docs/SETUP_GUIDE.md` with Docker section)
+- [x] Create configuration templates (`config/docker.env.example`)
+- [x] Build release artifacts support (`Makefile` with `make build`, `make release`)
+- [x] Update relevant documentation in `docs/API_REFERENCE.md` (added Deployment & Packaging section)
 
 **Acceptance Criteria:**
-- Docker image builds successfully
-- Package installable via pip
-- Installation documented
-- First-time setup easy
+- ✅ Docker image builds successfully (Dockerfile with openscad + xvfb + python deps)
+- ✅ Package installable via pip (`pyproject.toml` with console_scripts entry point)
+- ✅ Installation documented (SETUP_GUIDE.md Docker section + API_REFERENCE.md)
+- ✅ First-time setup easy (docker-compose.yml + env templates + Makefile shortcuts)
+
+**Implementation Details:**
+- Created `pyproject.toml` with hatchling build backend, package metadata, console_scripts entry: `3d-adk = src.main:main`
+- Created `Dockerfile` (python:3.11-slim base, installs openscad/xvfb, pip install -e .)
+- Created `docker-compose.yml` with volume mounts for projects/ and sessions/
+- Created `.dockerignore` to optimize Docker build context
+- Created `config/docker.env.example` with Docker-specific defaults
+- Created `Makefile` with targets: install, test, build, docker-build, docker-run, release, clean, verify
+- Added Docker deployment section to SETUP_GUIDE.md
+- Added comprehensive Deployment & Packaging section to API_REFERENCE.md
+
+**Created PR:** (commit with git)
 
 ---
 
