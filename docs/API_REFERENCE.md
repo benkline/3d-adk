@@ -5,7 +5,7 @@
 ### Coordinator Agent
 **Purpose:** Orchestrates 3D printing workflow across all phases (design, modeling, monitor)
 
-**Implementation:** `google.adk.agents.LlmAgent` with five `FunctionTool`-wrapped async functions and three sub-agents
+**Implementation:** `google.adk.agents.LlmAgent` with eight `FunctionTool`-wrapped async functions and three sub-agents
 
 **Agent Name:** `coordinator_agent`
 
@@ -19,9 +19,10 @@
 **Responsibilities:**
 1. Create and manage project sessions
 2. Track current phase and completion status
-3. Route to appropriate sub-agents based on phase
-4. Validate and execute phase transitions
-5. Support backtracking between phases (with guards)
+3. Manage phase completion state flags (design approval, model export, print start)
+4. Route to appropriate sub-agents based on phase
+5. Validate and execute phase transitions
+6. Support backtracking between phases (with guards)
 
 See: [../specs/COORDINATOR_AGENT_SPEC.md](../specs/COORDINATOR_AGENT_SPEC.md) for detailed specification
 
@@ -205,6 +206,93 @@ result = await backtrack_phase(session_id="abc123")
 # Returns: {
 #   "status": "error",
 #   "message": "Cannot backtrack from monitor phase: print has already started"
+# }
+```
+
+---
+
+#### `approve_design(session_id: str) -> dict`
+Approve the design and mark as ready for modeling phase.
+
+Sets `design_approved = True` in the session state, enabling the design → modeling transition.
+
+**Parameters:**
+- `session_id` (str): Session ID to update
+
+**Returns:** dict with keys:
+- `status` (str): "ok" or "error"
+- `session_id` (str): Session ID
+- `design_approved` (bool): Always True on success
+- `message` (str): Info or error message
+
+**Error Handling:** Returns error dict with message rather than raising exceptions
+
+**Example:**
+```python
+result = await approve_design(session_id="abc123")
+# Returns: {
+#   "status": "ok",
+#   "session_id": "abc123",
+#   "design_approved": True,
+#   "message": "Design successfully approved"
+# }
+```
+
+---
+
+#### `mark_model_exported(session_id: str) -> dict`
+Mark the model as exported and ready for printing phase.
+
+Sets `model_exported = True` in the session state, enabling the modeling → monitor transition.
+
+**Parameters:**
+- `session_id` (str): Session ID to update
+
+**Returns:** dict with keys:
+- `status` (str): "ok" or "error"
+- `session_id` (str): Session ID
+- `model_exported` (bool): Always True on success
+- `message` (str): Info or error message
+
+**Error Handling:** Returns error dict with message rather than raising exceptions
+
+**Example:**
+```python
+result = await mark_model_exported(session_id="abc123")
+# Returns: {
+#   "status": "ok",
+#   "session_id": "abc123",
+#   "model_exported": True,
+#   "message": "Model successfully marked as exported"
+# }
+```
+
+---
+
+#### `mark_print_started(session_id: str) -> dict`
+Mark the print as started to prevent backtracking from monitor phase.
+
+Sets `print_started = True` in the session state, preventing backtrack from monitor → modeling.
+
+**Parameters:**
+- `session_id` (str): Session ID to update
+
+**Returns:** dict with keys:
+- `status` (str): "ok" or "error"
+- `session_id` (str): Session ID
+- `print_started` (bool): Always True on success
+- `message` (str): Info or error message
+
+**Error Handling:** Returns error dict with message rather than raising exceptions
+
+**Example:**
+```python
+result = await mark_print_started(session_id="abc123")
+# Returns: {
+#   "status": "ok",
+#   "session_id": "abc123",
+#   "print_started": True,
+#   "message": "Print successfully marked as started"
 # }
 ```
 
