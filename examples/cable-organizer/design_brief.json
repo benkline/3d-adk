@@ -1,0 +1,29 @@
+{
+  "object_name": "Desk Cable Organizer",
+  "purpose": "Organization and cable management",
+  "dimensions": {
+    "width_mm": 150,
+    "depth_mm": 60,
+    "height_mm": 80
+  },
+  "materials": [
+    "PETG"
+  ],
+  "aesthetics": "Functional, modern",
+  "constraints": [
+    "Hold 5-6 cables securely",
+    "Must prevent tangling",
+    "Easy access without disassembly",
+    "Stable on desk"
+  ],
+  "special_requirements": [
+    "Multiple cable slots of different sizes (USB, Lightning, USB-C)",
+    "Labeling capability for cable types",
+    "Non-slip feet",
+    "Quick-access design"
+  ],
+  "budget_estimate": "Medium",
+  "use_case": "Home office, workspace organization",
+  "audience": "Anyone with multiple devices",
+  "design_style": "Modern, functional"
+}

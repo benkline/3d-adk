@@ -1,0 +1,66 @@
+{
+  "project_name": "iphone_14_stand",
+  "design_intent": "Minimalist desktop phone stand with optimal viewing angle and cable management",
+  "brief_summary": "Desktop phone holder that securely holds modern smartphones at a 45° viewing angle with minimal material usage and non-slip base",
+  "dimensions": {
+    "overall_width_mm": 85,
+    "overall_depth_mm": 105,
+    "overall_height_mm": 125,
+    "base_thickness_mm": 8,
+    "arm_thickness_mm": 3,
+    "phone_slot_width_mm": 85,
+    "phone_slot_depth_mm": 8,
+    "cable_slot_width_mm": 6,
+    "cable_slot_depth_mm": 3
+  },
+  "material": "PLA",
+  "material_properties": {
+    "density_g_cm3": 1.24,
+    "yield_strength_mpa": 60,
+    "melting_point_c": 210,
+    "print_temperature_c": 200,
+    "bed_temperature_c": 60
+  },
+  "geometry": {
+    "base_shape": "rectangular_with_rounded_corners",
+    "base_features": "textured_surface_for_grip",
+    "arm_shape": "curved_bracket",
+    "arm_angle_degrees": 45,
+    "phone_grip": "gentle_curved_slots_with_friction_pads",
+    "cable_management": "bottom_exit_slot",
+    "overall_form": "single_monolithic_piece"
+  },
+  "print_settings": {
+    "wall_thickness_mm": 2.0,
+    "infill_percentage": 10,
+    "supports_required": false,
+    "recommended_orientation": "upright_as_designed",
+    "print_temperature_c": 200,
+    "bed_temperature_c": 60,
+    "estimated_print_time_hours": 2.5,
+    "estimated_print_time_seconds": 9000,
+    "estimated_weight_grams": 45,
+    "estimated_filament_length_mm": 5400,
+    "estimated_filament_weight_grams": 6.7
+  },
+  "assembly": "single_part",
+  "post_processing": [
+    "Light sanding of base to enhance grip texture",
+    "Optional: Apply matte sealant for protection"
+  ],
+  "printability": {
+    "wall_thickness_ok": true,
+    "no_overhangs": true,
+    "no_bridges": true,
+    "stability_good": true,
+    "complexity": "low"
+  },
+  "estimated_cost": {
+    "material_cost_usd": 0.17,
+    "electricity_cost_usd": 0.25,
+    "total_estimated_cost_usd": 0.42
+  },
+  "design_notes": "This is a simple, elegant phone stand that requires no supports and minimal post-processing. The 45° angle is optimized for desk viewing. The base texture prevents sliding on smooth surfaces.",
+  "version": "1.0",
+  "created_at": "2025-02-15T10:30:00Z"
+}

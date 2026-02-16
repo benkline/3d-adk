@@ -1,0 +1,28 @@
+{
+  "object_name": "iPhone 14 Phone Stand",
+  "purpose": "Desktop device holder for viewing",
+  "dimensions": {
+    "width_mm": 80,
+    "depth_mm": 100,
+    "height_mm": 120
+  },
+  "materials": [
+    "PLA"
+  ],
+  "aesthetics": "Minimalist, modern",
+  "constraints": [
+    "Must hold iPhone 14 securely",
+    "Non-slip base required",
+    "Lightweight",
+    "Compact footprint"
+  ],
+  "special_requirements": [
+    "Viewing angle: 45 degrees",
+    "Cable management: Small notch for charging cable",
+    "Rounded edges for comfort"
+  ],
+  "budget_estimate": "Low (single material, simple geometry)",
+  "use_case": "Personal desk use",
+  "audience": "Anyone with a smartphone",
+  "design_style": "Modern, minimalist"
+}
